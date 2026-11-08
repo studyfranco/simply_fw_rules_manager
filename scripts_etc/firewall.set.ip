@@ -1,0 +1,357 @@
+#! /bin/bash
+
+source /etc/firewall/firewall.settings
+source /etc/firewall/firewall.tools
+
+hosts_deny_file="/etc/hosts.deny"
+
+# Emplacement du fichier de verrou
+LOCKFILE="/tmp/set.ip.lock"
+
+# Vérifier si un autre processus est en cours d'exécution en vérifiant le verrou
+if [ -e "$LOCKFILE" ]; then
+    echo "Un autre processus de synchronisation est en cours. Sortie."
+    exit 1
+fi
+
+add_doh()
+{
+	$IPS create $IPSDOH hash:ip,port maxelem 999999999 2> /dev/null
+	$IPS flush $IPSDOH
+	$IPS add $IPSDOH 8.8.4.4,443 2> /dev/null &
+	$IPS add $IPSDOH 8.8.8.8,443 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.112,443 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.9,443 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.9,443 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.10,443 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.10,443 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.11,443 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.11,443 2> /dev/null &
+	$IPS add $IPSDOH 104.28.1.106,443 2> /dev/null &
+	$IPS add $IPSDOH 104.28.0.106,443 2> /dev/null &
+	$IPS add $IPSDOH 45.90.28.0,443 2> /dev/null &
+	$IPS add $IPSDOH 45.90.30.0,443 2> /dev/null &
+	$IPS add $IPSDOH 176.103.130.131,443 2> /dev/null &
+	$IPS add $IPSDOH 176.103.130.130,443 2> /dev/null &
+	$IPS add $IPSDOH 176.103.130.132,443 2> /dev/null &
+	$IPS add $IPSDOH 176.103.130.134,443 2> /dev/null &
+	$IPS add $IPSDOH 96.113.151.147,443 2> /dev/null &
+	$IPS add $IPSDOH 185.228.168.9,443 2> /dev/null &
+	$IPS add $IPSDOH 185.228.169.9,443 2> /dev/null &
+	$IPS add $IPSDOH 185.228.168.168,443 2> /dev/null &
+	$IPS add $IPSDOH 185.228.169.168,443 2> /dev/null &
+	$IPS add $IPSDOH 185.228.168.10,443 2> /dev/null &
+	$IPS add $IPSDOH 185.228.169.11,443 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.112,5053 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.9,5053 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.9,5053 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.10,5053 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.10,5053 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.11,5053 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.11,5053 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.12,5053 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.12,5053 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.13,5053 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.13,5053 2> /dev/null &
+	$IPS add $IPSDOH 167.114.220.125,453 2> /dev/null &
+	$IPS add $IPSDOH 149.56.228.45,453 2> /dev/null &
+	
+	local line
+	curl -s https://raw.githubusercontent.com/oneoffdallas/dohservers/master/iplist.txt | while read -r line
+	do
+	  # Vérifie si la ligne n'est pas un commentaire (ne commence pas par #)
+	  if [[ ! $line =~ ^\# ]]; then
+		# Vérifie si la ligne contient une adresse IPv6
+		if is_ipv4 "${line}"; then
+		  # Ajoute l'adresse IPv6 au tableau
+		  $IPS add ${IPSDOH} ${line},443 2> /dev/null &
+		fi
+	  fi
+	done
+
+	wait
+	return 0
+}
+
+add_doh6()
+{
+	$IPS create ${IPSDOH}6 hash:ip,port maxelem 999999999 family inet6 2> /dev/null
+	$IPS flush ${IPSDOH}6
+	local line
+	curl -s https://raw.githubusercontent.com/oneoffdallas/dohservers/master/ipv6list.txt | while read -r line
+	do
+	  # Vérifie si la ligne n'est pas un commentaire (ne commence pas par #)
+	  if [[ ! $line =~ ^\# ]]; then
+		# Vérifie si la ligne contient une adresse IPv6
+		if is_ipv6 "${line}"; then
+		  # Ajoute l'adresse IPv6 au tableau
+		  $IPS add ${IPSDOH}6 ${line},443 2> /dev/null &
+		fi
+	  fi
+	done
+	wait
+	return 0
+}
+
+add_ipaut()
+{
+	$IPS create $IPSLISTGOODIP hash:ip maxelem 999999999 2> /dev/null
+	$IPS flush $IPSLISTGOODIP 2> /dev/null
+	# Ajout des IPV4s autorisé
+	local IP
+	for IP in "${IPAutor[@]}"; do
+		$IPS add $IPSLISTGOODIP $IP 2> /dev/null &
+		$ROUTE -n del $IPSLISTGOODIP reject 2> /dev/null &
+		$SED -i "/^ALL: ${IPSLISTGOODIP} : DENY/d" "${hosts_deny_file}" &
+		#${FAILBAN} set sshd unbanip ${IPSLISTGOODIP} 2> /dev/null &
+		#${FAILBAN} set recidive unbanip ${IPSLISTGOODIP} 2> /dev/null &
+	done
+	wait
+	return 0
+}
+
+add_ipaut6()
+{
+	$IPS create ${IPSLISTGOODIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null
+	$IPS flush ${IPSLISTGOODIP}6 2> /dev/null
+	
+		#$IPS add $IPSLISTGOODIP $IP 2> /dev/null &
+		#$ROUTE -n del $IPSLISTGOODIP reject 2> /dev/null &
+		#$SED -i "/^ALL: ${IPSLISTGOODIP} : DENY/d" "${hosts_deny_file}" &
+		#${FAILBAN} set sshd unbanip ${IPSLISTGOODIP} 2> /dev/null &
+		#${FAILBAN} set recidive unbanip ${IPSLISTGOODIP} 2> /dev/null &
+		
+	wait
+	return 0
+}
+
+add_ipblock()
+{
+	local pid
+	$IPS create ${IPSLISTBADIP} hash:net maxelem 999999999 2> /dev/null &
+	$IPS create temp_${IPSLISTBADIP} hash:net maxelem 999999999 2> /dev/null && \
+		$IPS flush temp_${IPSLISTBADIP} 2> /dev/null & pid=$!
+	# Creation d'un groupe pour les IPV4s Bloques
+	declare -a IPBlock
+	mapfile -t IPBlock < /etc/firewall/firewall.block.ip
+	local IP
+	wait $pid
+	
+	insert_rules_with_test_ok_ipv4 "-I INPUT 1 -m set --match-set $IPSLISTBADIP src -j DROP" "" &
+	insert_rules_with_test_ok_ipv4 "-I OUTPUT 1 -m set --match-set $IPSLISTBADIP dst -j DROP" "" &
+	insert_rules_with_test_ok_ipv4 "-I FORWARD 1 -m set --match-set $IPSLISTBADIP src -j DROP" "" &
+	insert_rules_with_test_ok_ipv4 "-I FORWARD 1 -m set --match-set $IPSLISTBADIP dst -j DROP" "" &
+
+	$IPS save temp_${IPSLISTBADIP} > /tmp/temp_${IPSLISTBADIP} && $IPS destroy temp_${IPSLISTBADIP}
+	for IP in "${IPBlock[@]}"; do
+		if is_ipv4 "${IP}"; then
+			echo "add temp_${IPSLISTBADIP} ${IP}" >> /tmp/temp_${IPSLISTBADIP}
+		elif is_ipv4_net "${IP}"; then
+			echo "add temp_${IPSLISTBADIP} ${IP}" >> /tmp/temp_${IPSLISTBADIP}
+		fi
+	done
+	mapfile -t IPBlock < /etc/firewall/to_block.ipv4
+	for IP in "${IPBlock[@]}"; do
+		if is_ipv4 "${IP}"; then
+			echo "add temp_${IPSLISTBADIP} ${IP}" >> /tmp/temp_${IPSLISTBADIP}
+		elif is_ipv4_net "${IP}"; then
+			echo "add temp_${IPSLISTBADIP} ${IP}" >> /tmp/temp_${IPSLISTBADIP}
+		fi
+	done
+	$IPS restore -! < /tmp/temp_${IPSLISTBADIP}
+	$IPS swap temp_${IPSLISTBADIP} ${IPSLISTBADIP}
+	$IPS destroy temp_${IPSLISTBADIP} &
+	rm /tmp/temp_${IPSLISTBADIP} &
+
+	#for IP in "${IPBlock[@]}"; do
+	#	add_ipblock_actions "${IP}" &
+	#	#sleep 0.001
+	#done
+	#mapfile -t IPBlock < /etc/firewall/firewall.block.ip
+	#for IP in "${IPBlock[@]}"; do
+	#	add_ipblock_actions "${IP}" &
+	#	#sleep 0.001
+	#done
+	wait
+	sleep 600
+	insert_rules_with_test_ok_ipv4 "-D INPUT -m set --match-set $IPSLISTBADIP src -j DROP" ""
+	insert_rules_with_test_ok_ipv4 "-D OUTPUT -m set --match-set $IPSLISTBADIP dst -j DROP" ""
+	insert_rules_with_test_ok_ipv4 "-D FORWARD -m set --match-set $IPSLISTBADIP src -j DROP" ""
+	insert_rules_with_test_ok_ipv4 "-D FORWARD -m set --match-set $IPSLISTBADIP dst -j DROP" ""
+	return 0
+}
+
+add_ipblock_actions()
+{
+	#nice -n 30 $IPS add ${IPSLISTBADIP} $1 2> /dev/null
+	#nice -n 30 $IPS add temp_${IPSLISTBADIP} $1 2> /dev/null
+	nice -n 100 $DUMPCO -k src $1 > /dev/null 2>&1 &
+	nice -n 100 $DUMPCO -k dst $1 > /dev/null 2>&1 &
+	wait
+	return 0
+}
+
+add_ipblock6()
+{
+	local pid
+	$IPS create ${IPSLISTBADIP}6 hash:net maxelem 999999999 family inet6 2> /dev/null &
+	$IPS create temp_${IPSLISTBADIP}6 hash:net maxelem 999999999 family inet6 2> /dev/null && \
+		$IPS flush temp_${IPSLISTBADIP}6 2> /dev/null & pid=$!
+	declare -a IPBlock6
+	mapfile -t IPBlock6 < /etc/firewall/to_block.ipv6
+	local IP
+	wait $pid
+
+	insert_rules_with_test_ok_ipv6 "-I INPUT 1 -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" &
+	insert_rules_with_test_ok_ipv6 "-I OUTPUT 1 -m set --match-set ${IPSLISTBADIP}6 dst -j DROP" "" &
+	insert_rules_with_test_ok_ipv6 "-I FORWARD 1 -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" &
+	insert_rules_with_test_ok_ipv6 "-I FORWARD 1 -m set --match-set ${IPSLISTBADIP}6 dst -j DROP" "" &
+
+	$IPS save temp_${IPSLISTBADIP}6 > /tmp/temp_${IPSLISTBADIP}6 && $IPS destroy temp_${IPSLISTBADIP}6
+	for IP in "${IPBlock6[@]}"; do
+		echo "add temp_${IPSLISTBADIP}6 ${IP}" >> /tmp/temp_${IPSLISTBADIP}6
+	done
+	mapfile -t IPBlock6 < /etc/firewall/firewall.block.ip6
+	for IP in "${IPBlock6[@]}"; do
+		echo "add temp_${IPSLISTBADIP}6 ${IP}" >> /tmp/temp_${IPSLISTBADIP}6
+	done
+	$IPS restore -! < /tmp/temp_${IPSLISTBADIP}6
+	$IPS swap temp_${IPSLISTBADIP}6 ${IPSLISTBADIP}6
+	$IPS destroy temp_${IPSLISTBADIP}6 &
+	rm /tmp/temp_${IPSLISTBADIP}6 &
+
+	#for IP in "${IPBlock6[@]}"; do
+	#	add_ipblock6_actions "${IP}" &
+	#	#sleep 0.001
+	#done
+	#mapfile -t IPBlock6 < /etc/firewall/to_block.ipv6
+	#for IP in "${IPBlock6[@]}"; do
+	#	add_ipblock6_actions "${IP}" &
+	#	#sleep 0.001
+	#done
+	wait
+	sleep 600
+	insert_rules_with_test_ok_ipv6 "-D INPUT -m set --match-set ${IPSLISTBADIP}6 src -j DROP" ""
+	insert_rules_with_test_ok_ipv6 "-D OUTPUT -m set --match-set ${IPSLISTBADIP}6 dst -j DROP" ""
+	insert_rules_with_test_ok_ipv6 "-D FORWARD -m set --match-set ${IPSLISTBADIP}6 src -j DROP" ""
+	insert_rules_with_test_ok_ipv6 "-D FORWARD -m set --match-set ${IPSLISTBADIP}6 dst -j DROP" ""
+	return 0
+}
+
+add_ipblock6_actions()
+{
+	#nice -n 30 $IPS add ${IPSLISTBADIP}6 $1 2> /dev/null
+	#nice -n 30 $IPS add temp_${IPSLISTBADIP}6 $1 2> /dev/null
+	nice -n 100 $DUMPCO -6 -k src $1 > /dev/null 2>&1 &
+	nice -n 100 $DUMPCO -6 -k dst $1 > /dev/null 2>&1 &
+	wait
+	return 0
+}
+
+add_iplocal()
+{
+	$IPS create ${IPSLOCALS} hash:net maxelem 999999999 2> /dev/null
+	$IPS flush ${IPSLOCALS} 2> /dev/null
+	$IPS add ${IPSLOCALS} 192.168.0.0/16 2> /dev/null &
+	$IPS add ${IPSLOCALS} 172.16.0.0/12 2> /dev/null &
+	$IPS add ${IPSLOCALS} 10.0.0.0/8 2> /dev/null &
+	
+	$IPS add ${IPSLOCALS} 198.18.0.0/15 2> /dev/null &
+	$IPS add ${IPSLOCALS} 100.64.0.0/10 2> /dev/null &
+	wait
+	return 0
+}
+
+add_iplocal6()
+{
+	$IPS create ${IPSLOCALS}6 hash:net maxelem 999999999 family inet6 2> /dev/null
+	$IPS flush ${IPSLOCALS}6 2> /dev/null
+	$IPS add ${IPSLOCALS}6 fe80::/10 2> /dev/null &
+	$IPS add ${IPSLOCALS}6 fc00::/7 2> /dev/null &
+	$IPS add ${IPSLOCALS}6 fd00::/8 2> /dev/null &
+	wait
+	return 0
+}
+
+add_iplocal6_80()
+{
+	$IPS create ${IPSLOCALS}6_80 hash:net maxelem 999999999 family inet6 2> /dev/null
+	$IPS flush ${IPSLOCALS}6_80 2> /dev/null
+	$IPS add ${IPSLOCALS}6_80 fe80::/10 2> /dev/null &
+	$IPS add ${IPSLOCALS}6_80 fe80::/64 2> /dev/null &
+	wait
+	return 0
+}
+
+add_ip_plex()
+{
+	$IPS create $IPSPLEXIPS hash:ip maxelem 999999999 2> /dev/null
+	$IPS flush $IPSPLEXIPS 2> /dev/null
+	$IPS create ${IPSPLEXIPS}6 hash:ip maxelem 999999999 family inet6 2> /dev/null
+	$IPS flush ${IPSPLEXIPS}6 2> /dev/null
+	# Open plex ports https://s3-eu-west-1.amazonaws.com/plex-sidekiq-servers-list/sidekiqIPs.txt
+	local line
+	curl -s https://s3-eu-west-1.amazonaws.com/plex-sidekiq-servers-list/sidekiqIPs.txt | while read -r line
+	do
+		if is_ipv4 "${line}"; then
+			$IPS add $IPSPLEXIPS "${line}" 2> /dev/null &
+		elif is_ipv6 "${line}"; then
+			$IPS add ${IPSPLEXIPS}6 "${line}" 2> /dev/null &
+		else
+			echo "IP non reconnue : ${line}"
+		fi
+	done
+	wait
+	return 0
+}
+
+add_country_open_set()
+{
+	$IPS create ${IPCCOPEN} hash:net maxelem 999999999 2> /dev/null
+	$IPS create ${IPCCOPEN}6 hash:net maxelem 999999999 family inet6 2> /dev/null
+	$IPS flush ${IPCCOPEN} 2> /dev/null
+	$IPS flush ${IPCCOPEN}6 2> /dev/null
+
+	for country in $(echo $countryOpenPort | tr ',' '\n'); do
+		country=$(echo "$country" | tr '[:upper:]' '[:lower:]')
+		get_ip_country_open "https://www.ipdeny.com/ipblocks/data/aggregated/${country}-aggregated.zone" "${IPCCOPEN}" &
+		get_ip_country_open "https://www.ipdeny.com/ipv6/ipaddresses/aggregated/${country}-aggregated.zone" "${IPCCOPEN}6" &
+	done
+	wait
+	return 0
+}
+
+get_ip_country_open() {
+	local network
+	local URL=$1
+	local setIP=$2
+	for network in $(curl ${URL} 2>/dev/null | grep -v "^#" | cut -d " " -f 1); do
+		$IPS add ${setIP} ${network}
+	done
+	return 0
+}
+
+$IPS create ${IPSLISTBADIP} hash:net maxelem 999999999 2> /dev/null &
+$IPS create ${IPSLISTBADIP}6 hash:net maxelem 999999999 family inet6 2> /dev/null &
+
+add_doh &
+add_doh6 &
+add_ipaut &
+add_ipaut6 &
+add_iplocal &
+add_iplocal6 &
+add_iplocal6_80 &
+add_ip_plex &
+add_country_open_set &
+
+/etc/firewall/firewall.get.list
+add_ipblock &
+add_ipblock6 &
+
+wait
+
+# Supprimer le fichier de verrou pour libérer le verrou
+rm -f "$LOCKFILE"
+
+# Fin du script
+exit 0
