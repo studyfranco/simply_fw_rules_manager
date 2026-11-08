@@ -41,7 +41,7 @@
     uris: "https://download.docker.com/linux/debian"
     suites: ["{{ debian_codename }}"]
     components: [stable]
-    architectures: ["{{ 'amd64' if ansible_architecture == 'x86_64' else ansible_architecture }}"]
+    architectures: ["{{ debian_arch }}"]
     signed_by: /etc/apt/keyrings/docker.gpg
     state: present
 

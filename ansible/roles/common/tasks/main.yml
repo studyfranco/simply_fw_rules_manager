@@ -24,9 +24,19 @@
         else (ansible_distribution_release if ansible_distribution_release in known_debian_codenames else target_debian_codename_fallback)
       }}
 
+- name: Determine Debian package architecture from hardware facts
+  ansible.builtin.set_fact:
+    debian_arch: >-
+      {{
+        'amd64' if ansible_architecture == 'x86_64'
+        else ('arm64' if (ansible_architecture in ['aarch64', 'arm64'])
+        else ('armhf' if (ansible_architecture in ['armv7l', 'armv6l', 'armhf'])
+        else ansible_architecture))
+      }}
+
 - name: Display detected system architecture and Debian codename
   ansible.builtin.debug:
-    msg: "Target host: {{ inventory_hostname }} | Architecture: {{ ansible_architecture }} | Codename: {{ debian_codename }}"
+    msg: "Target host: {{ inventory_hostname }} | Kernel Arch: {{ ansible_architecture }} | Debian Arch: {{ debian_arch }} | Codename: {{ debian_codename }}"
 
 - name: Update apt cache
   ansible.builtin.apt:
