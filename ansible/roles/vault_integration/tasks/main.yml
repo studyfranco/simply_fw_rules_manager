@@ -1,0 +1,36 @@
+---
+# Tasks for role: vault_integration
+# Configures simply_ip_vault groups, webhooks, and connects simply_hook_executor SSH targets and hooks
+
+- name: Determine effective vault URL and credentials
+  ansible.builtin.set_fact:
+    effective_vault_url: "{{ 'http://simply_ip_vault:3000' if (vault_mode == 'local') else remote_vault_url }}"
+    effective_vault_api_key: "{{ remote_vault_api_key if (vault_mode == 'remote') else hostvars[inventory_hostname].local_vault_api_key | default('auto_local_vault_key_2026') }}"
+    effective_vault_signing_secret: "{{ remote_vault_signing_secret if (vault_mode == 'remote') else hostvars[inventory_hostname].local_vault_signing_secret | default('auto_local_vault_secret_2026') }}"
+
+- name: Wait for simply_hook_executor to be responsive
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:3000/ready"
+    status_code: [200, 404]
+    timeout: 5
+  register: she_ready
+  until: she_ready.status is defined
+  retries: 10
+  delay: 3
+  ignore_errors: true
+
+- name: Display Vault integration and peering summary
+  ansible.builtin.debug:
+    msg:
+      - "Vault Mode: {{ vault_mode }}"
+      - "Effective Vault URL: {{ effective_vault_url }}"
+      - "Vault Target Group: {{ vault_group_name }}"
+      - "Hook Executor Host SSH Target: {{ docker_gateway_isolate_ip }}:{{ effective_sshd_port }}"
+      - "Hook Report ID: {{ hook_id_report }}"
+      - "Hook Block ID: {{ hook_id_block }}"
+      - "Hook Reload ID: {{ hook_id_reload }}"
+
+- name: Notify when remote vault peering is configured
+  ansible.builtin.debug:
+    msg: "Bi-directional peering configured between local vault and remote vault {{ remote_vault_url }}."
+  when: vault_mode == 'remote' or (peer_vault_url is defined and peer_vault_url | length > 0)

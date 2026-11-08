@@ -1,0 +1,41 @@
+---
+# Tasks for role: portsentry
+# Configures Portsentry daemon to execute /etc/firewall/firewall.report directly
+
+- name: Install Portsentry package
+  ansible.builtin.apt:
+    name: portsentry
+    state: present
+
+- name: Configure Portsentry running modes in /etc/default/portsentry
+  ansible.builtin.lineinfile:
+    path: /etc/default/portsentry
+    regexp: '^{{ item.key }}='
+    line: '{{ item.key }}="{{ item.value }}"'
+    state: present
+  loop:
+    - { key: "TCP_MODE", value: "atcp" }
+    - { key: "UDP_MODE", value: "audp" }
+  notify: Restart portsentry
+
+- name: Configure KILL_RUN_CMD in /etc/portsentry/portsentry.conf
+  ansible.builtin.lineinfile:
+    path: /etc/portsentry/portsentry.conf
+    regexp: '^KILL_RUN_CMD='
+    line: 'KILL_RUN_CMD="{{ firewall_dir }}/firewall.report $TARGET$ $PORT$"'
+    state: present
+  notify: Restart portsentry
+
+- name: Enable KILL_RUN_CMD_FIRST in /etc/portsentry/portsentry.conf
+  ansible.builtin.lineinfile:
+    path: /etc/portsentry/portsentry.conf
+    regexp: '^KILL_RUN_CMD_FIRST='
+    line: 'KILL_RUN_CMD_FIRST = "1"'
+    state: present
+  notify: Restart portsentry
+
+- name: Ensure Portsentry service is enabled and running
+  ansible.builtin.service:
+    name: portsentry
+    state: started
+    enabled: true

@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly Timer for Simply Containers Automated Update
+Documentation=https://github.com/studyfranco/simply_fw_rules_manager
+Requires=simply-containers-update.service
+
+[Timer]
+OnCalendar={{ container_update_schedule }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

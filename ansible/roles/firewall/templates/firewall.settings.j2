@@ -1,0 +1,64 @@
+#! /bin/bash
+# ==============================================================================
+# Managed by Ansible: Simply Firewall Main Settings
+# Permissions: 0600 root:root
+# ==============================================================================
+
+source {{ firewall_dir }}/firewall.tools
+
+# Main Outbound Network Interface
+mainInter="{{ ansible_default_ipv4.interface | default('eth0') }}"
+declare -a INTEROut=("{{ ansible_default_ipv4.interface | default('eth0') }};{{ ansible_default_ipv4.address | default('') }};{{ ansible_default_ipv6.address | default('') }}")
+
+declare -a interfaceToGoOutSide=()
+declare -a internInterfaceHaveAccessAsLocal=()
+declare -a interfaceLocal=()
+declare -A interfaceWithDHCP=()
+declare -a interfaceWithNoRules=()
+
+# Docker Networks Policy
+declare -a dockerNetworkWithInternetAccess=("{{ docker_net_ext_name }}" "bridge")
+declare -a dockerNetworkWithAccess=("{{ docker_net_isolate_name }}" "{{ docker_net_ext_name }}" "bridge")
+declare -a dockerAccessBetweenThem=()
+
+# Trusted Administration IPs
+declare -a IPAutor=({{ (firewall_trusted_ips | default([])) | map('quote') | join(' ') }})
+declare -a IPAutorDnatPortTCP=()
+declare -a IPAutorDnatPortUDP=()
+declare -a IPAutorDockerTCP=()
+declare -a IPAutorDockerUDP=()
+
+# Local & Internal Ports
+declare -a internalOpenPortsTCP=()
+declare -a internalOpenPortsUDP=()
+declare -a internalRedirectPortTCP=()
+declare -a internalRedirectPortUDP=()
+declare -a internalDnatPortTCP=()
+declare -a internalDnatPortUDP=()
+declare -a internalDockerTCP=()
+declare -a internalDockerUDP=()
+
+# WW (World Wide) Open Ports
+declare -a WWOpenPortsTCP=("{{ effective_sshd_port }}")
+declare -a WWOpenPortsUDP=()
+declare -a WWRedirectPortTCP=()
+declare -a WWRedirectPortUDP=()
+declare -a WWDnatPortTCP=()
+declare -a WWDnatPortUDP=()
+declare -a WWDockerTCP=()
+declare -a WWDockerUDP=()
+
+# Outbound Allowed Ports
+declare -a openPortsOutSideTCP=("80" "443" "53")
+declare -a openPortsOutSideUDP=("53" "123")
+
+# Local Forward / NAT
+declare -a openLocalPortTCP=()
+declare -a openLocalPortUDP=()
+declare -a openDockerTCP=()
+declare -a openDockerUDP=()
+
+# Blocked Country Codes (GeoIP)
+declare -a blocked_country=({{ (firewall_blocked_countries | default([])) | map('quote') | join(' ') }})
+declare -a blocked_country_2=()
+declare -a open_country=()

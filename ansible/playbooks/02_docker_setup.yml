@@ -1,0 +1,7 @@
+---
+- name: Step 2 - Docker Engine & Isolated Bridge Networks
+  hosts: security_nodes
+  become: true
+  gather_facts: true
+  roles:
+    - role: docker

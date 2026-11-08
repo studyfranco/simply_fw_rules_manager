@@ -1,0 +1,117 @@
+---
+# Tasks for role: docker
+# Installs Docker repository, configures IPv6 daemon.json, and establishes isolated bridge networks
+
+- name: Ensure /etc/apt/keyrings exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Check if Docker official repository key exists
+  ansible.builtin.stat:
+    path: /etc/apt/keyrings/docker.gpg
+  register: docker_gpg_key
+
+- name: Download Docker official GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/debian/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+  when: not docker_gpg_key.stat.exists
+
+- name: Dearmor Docker GPG key if needed
+  ansible.builtin.shell:
+    cmd: "gpg --dearmor -o /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker.asc && rm -f /etc/apt/keyrings/docker.asc"
+  when: not docker_gpg_key.stat.exists
+
+- name: Ensure correct permissions on Docker GPG key
+  ansible.builtin.file:
+    path: /etc/apt/keyrings/docker.gpg
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure official Docker apt repository (deb822 format)
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: "https://download.docker.com/linux/debian"
+    suites: ["{{ debian_codename }}"]
+    components: [stable]
+    architectures: ["{{ 'amd64' if ansible_architecture == 'x86_64' else ansible_architecture }}"]
+    signed_by: /etc/apt/keyrings/docker.gpg
+    state: present
+
+- name: Install Docker CE and plugins
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    install_recommends: false
+
+- name: Deploy Docker daemon configuration (/etc/docker/daemon.json)
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart docker daemon
+
+- name: Flush handlers to ensure Docker daemon runs with IPv6 enabled
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure Docker service is enabled and started
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Check status of 'ext' Docker network
+  ansible.builtin.command:
+    cmd: docker network inspect {{ docker_net_ext_name }}
+  register: check_net_ext
+  failed_when: false
+  changed_when: false
+
+- name: Create 'ext' Docker bridge network
+  ansible.builtin.command:
+    cmd: >-
+      docker network create
+      --driver bridge
+      --ipv6
+      --subnet={{ docker_net_ext_ipv4_subnet }}
+      --subnet={{ docker_net_ext_ipv6_subnet }}
+      --opt com.docker.network.bridge.enable_icc=false
+      --opt com.docker.network.bridge.name={{ docker_net_ext_name }}
+      --opt com.docker.network.bridge.enable_ip_masquerade=false
+      {{ docker_net_ext_name }}
+  when: check_net_ext.rc != 0
+
+- name: Check status of 'isolate' Docker network
+  ansible.builtin.command:
+    cmd: docker network inspect {{ docker_net_isolate_name }}
+  register: check_net_isolate
+  failed_when: false
+  changed_when: false
+
+- name: Create 'isolate' Docker bridge network
+  ansible.builtin.command:
+    cmd: >-
+      docker network create
+      --driver bridge
+      --ipv6
+      --subnet={{ docker_net_isolate_ipv4_subnet }}
+      --subnet={{ docker_net_isolate_ipv6_subnet }}
+      --opt com.docker.network.bridge.enable_icc=false
+      --opt com.docker.network.bridge.name={{ docker_net_isolate_name }}
+      --opt com.docker.network.bridge.enable_ip_masquerade=false
+      {{ docker_net_isolate_name }}
+  when: check_net_isolate.rc != 0

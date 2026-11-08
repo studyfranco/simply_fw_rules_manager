@@ -1,0 +1,20 @@
+---
+# Handlers for role: firewall
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart firewall
+  ansible.builtin.service:
+    name: firewall
+    state: restarted
+
+- name: Reload firewall rules
+  ansible.builtin.command:
+    cmd: "{{ firewall_dir }}/firewall reload"
+
+- name: Reload firewall ipsets
+  ansible.builtin.service:
+    name: firewall-set-ip
+    state: reloaded

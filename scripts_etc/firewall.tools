@@ -2,8 +2,8 @@
 # ==============================================================================
 # IMMUTABLE SYSTEM CONSTANTS & CHAIN/IPSET NAMES (Managed by firewall.tools)
 # ==============================================================================
-IPT=/sbin/iptables
-IPT6=/sbin/ip6tables
+IPT="/sbin/iptables -w 5"
+IPT6="/sbin/ip6tables -w 5"
 IPS=/sbin/ipset
 ROUTE=/sbin/route
 SED=/bin/sed

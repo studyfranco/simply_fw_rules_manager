@@ -1,0 +1,15 @@
+[Unit]
+Description=Simply Firewall IP Sets and GeoIP Loader
+Documentation=https://github.com/studyfranco/simply_fw_rules_manager
+After=network-online.target docker.service firewall.service
+Wants=network-online.target
+Requires=firewall.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart={{ firewall_dir }}/firewall.set.ip reload
+ExecReload={{ firewall_dir }}/firewall.set.ip reload
+
+[Install]
+WantedBy=multi-user.target

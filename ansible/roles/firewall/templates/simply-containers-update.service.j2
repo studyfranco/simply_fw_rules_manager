@@ -1,0 +1,10 @@
+[Unit]
+Description=Simply Containers Automated Weekly Update Service
+Documentation=https://github.com/studyfranco/simply_fw_rules_manager
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={{ compose_dir }}
+ExecStart=/bin/bash -c "docker compose pull --ignore-pull-failures && docker compose stop && docker compose up -d && {{ firewall_dir }}/firewall reload-rules"

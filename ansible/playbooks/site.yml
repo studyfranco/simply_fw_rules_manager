@@ -1,0 +1,80 @@
+---
+# ==============================================================================
+# Master Deployment Playbook for simply_* Security Ecosystem
+# Usage:
+#   Interactive: ansible-playbook playbooks/site.yml
+#   Headless/CI: ansible-playbook playbooks/site.yml -e "database_type=sqlite vault_mode=local"
+# ==============================================================================
+- name: Deploy and Configure simply_* Security Ecosystem
+  hosts: security_nodes
+  become: true
+  gather_facts: true
+
+  vars_prompt:
+    - name: input_debian_codename
+      prompt: "Debian version codename fallback [press Enter for 'trixie']"
+      default: "trixie"
+      private: false
+
+    - name: input_database_type
+      prompt: "Database type ('sqlite', 'postgres_container', 'postgres_external') [press Enter for 'sqlite']"
+      default: "sqlite"
+      private: false
+
+    - name: input_postgres_version
+      prompt: "PostgreSQL version if containerized [press Enter for '18']"
+      default: "18"
+      private: false
+
+    - name: input_vault_mode
+      prompt: "simply_ip_vault deployment ('local' or 'remote') [press Enter for 'local']"
+      default: "local"
+      private: false
+
+    - name: input_remote_vault_url
+      prompt: "Remote simply_ip_vault URL (if remote mode selected)"
+      default: ""
+      private: false
+
+    - name: input_deploy_sync
+      prompt: "Deploy simply_ip_sync threat feed aggregator? (yes/no) [press Enter for 'no']"
+      default: "no"
+      private: false
+
+    - name: input_deploy_exporter
+      prompt: "Deploy simply_ip_exporter raw list service? (yes/no) [press Enter for 'no']"
+      default: "no"
+      private: false
+
+  pre_tasks:
+    - name: Apply interactive prompts if variables are not already passed via CLI or inventory
+      ansible.builtin.set_fact:
+        target_debian_codename_fallback: "{{ target_debian_codename_fallback | default(input_debian_codename) }}"
+        database_type: "{{ database_type | default(input_database_type) }}"
+        postgres_version: "{{ postgres_version | default(input_postgres_version) }}"
+        vault_mode: "{{ vault_mode | default(input_vault_mode) }}"
+        remote_vault_url: "{{ remote_vault_url | default(input_remote_vault_url) }}"
+        deploy_simply_ip_sync: "{{ deploy_simply_ip_sync | default(input_deploy_sync | bool) }}"
+        deploy_simply_ip_exporter: "{{ deploy_simply_ip_exporter | default(input_deploy_exporter | bool) }}"
+
+  roles:
+    - role: common
+      tags: [common, prereqs]
+
+    - role: docker
+      tags: [docker]
+
+    - role: hookexecutor
+      tags: [hookexecutor, ssh]
+
+    - role: portsentry
+      tags: [portsentry]
+
+    - role: firewall
+      tags: [firewall, systemd]
+
+    - role: containers
+      tags: [containers, compose]
+
+    - role: vault_integration
+      tags: [vault, integration]

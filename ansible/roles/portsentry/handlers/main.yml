@@ -1,0 +1,7 @@
+---
+# Handlers for role: portsentry
+
+- name: Restart portsentry
+  ansible.builtin.service:
+    name: portsentry
+    state: restarted

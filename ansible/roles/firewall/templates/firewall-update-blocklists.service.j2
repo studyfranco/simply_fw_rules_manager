@@ -1,0 +1,9 @@
+[Unit]
+Description=Simply Firewall Threat Feeds & Whitelist Synchronization
+Documentation=https://github.com/studyfranco/simply_fw_rules_manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c "{{ firewall_dir }}/firewall.get.list && {{ firewall_dir }}/firewall.set.ip reload"

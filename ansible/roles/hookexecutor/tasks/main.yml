@@ -1,0 +1,98 @@
+---
+# Tasks for role: hookexecutor
+# Configures dedicated unprivileged user, generates SSH credentials, and sets restricted sudoers
+
+- name: Detect SSH port from sshd_config and drop-in configurations
+  ansible.builtin.shell:
+    cmd: >-
+      grep -E '^\s*Port\s+[0-9]+' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null
+      | awk '{print $2}'
+      | sort -u
+  register: raw_sshd_ports
+  changed_when: false
+  failed_when: false
+
+- name: Determine effective SSH port
+  ansible.builtin.set_fact:
+    effective_sshd_port: >-
+      {{
+        raw_sshd_ports.stdout_lines[0]
+        if (raw_sshd_ports.stdout_lines is defined and raw_sshd_ports.stdout_lines | length == 1)
+        else sshd_port
+      }}
+
+- name: Display detected SSH port
+  ansible.builtin.debug:
+    msg: "SSH Daemon Port detected on host: {{ effective_sshd_port }}"
+
+- name: Ensure hookexecutor system group exists
+  ansible.builtin.group:
+    name: "{{ hookexecutor_group }}"
+    state: present
+    system: true
+
+- name: Ensure hookexecutor unprivileged system user exists
+  ansible.builtin.user:
+    name: "{{ hookexecutor_user }}"
+    group: "{{ hookexecutor_group }}"
+    home: "{{ hookexecutor_home }}"
+    shell: /bin/bash
+    create_home: true
+    state: present
+    system: true
+
+- name: Ensure hookexecutor .ssh directory exists
+  ansible.builtin.file:
+    path: "{{ hookexecutor_home }}/.ssh"
+    state: directory
+    owner: "{{ hookexecutor_user }}"
+    group: "{{ hookexecutor_group }}"
+    mode: "0700"
+
+- name: Check if hookexecutor SSH keypair exists
+  ansible.builtin.stat:
+    path: "{{ hookexecutor_ssh_key_path }}"
+  register: hookexecutor_key_stat
+
+- name: Generate dedicated Ed25519 SSH keypair for hookexecutor
+  ansible.builtin.command:
+    cmd: "ssh-keygen -t {{ hookexecutor_ssh_key_type }} -N '' -f {{ hookexecutor_ssh_key_path }} -C 'simply_hook_executor@{{ inventory_hostname }}'"
+  when: not hookexecutor_key_stat.stat.exists
+
+- name: Ensure permissions on hookexecutor private and public keys
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: "{{ hookexecutor_user }}"
+    group: "{{ hookexecutor_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ hookexecutor_ssh_key_path }}", mode: "0600" }
+    - { path: "{{ hookexecutor_ssh_key_path }}.pub", mode: "0644" }
+
+- name: Read public key for authorized_keys installation
+  ansible.builtin.slurp:
+    src: "{{ hookexecutor_ssh_key_path }}.pub"
+  register: hookexecutor_pubkey_content
+
+- name: Install public key into hookexecutor authorized_keys
+  ansible.builtin.copy:
+    content: "{{ hookexecutor_pubkey_content.content | b64decode }}"
+    dest: "{{ hookexecutor_home }}/.ssh/authorized_keys"
+    owner: "{{ hookexecutor_user }}"
+    group: "{{ hookexecutor_group }}"
+    mode: "0600"
+
+- name: Configure restricted sudoers permissions (/etc/sudoers.d/hookexecutor)
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/hookexecutor
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "/usr/sbin/visudo -cf %s"
+    content: |
+      # Managed by Ansible: Restricted privileges for simply_hook_executor
+      Defaults:{{ hookexecutor_user }} !requiretty
+      {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall.report
+      {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall.launch.block.ip
+      {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall reload
+      {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall reload-rules

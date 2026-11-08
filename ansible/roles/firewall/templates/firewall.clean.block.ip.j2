@@ -1,0 +1,28 @@
+#!/bin/bash
+# ==============================================================================
+# Managed by Ansible: Clean Blocklists and Recheck Routes
+# Permissions: 0700 root:root
+# ==============================================================================
+
+source {{ firewall_dir }}/firewall.settings
+source {{ firewall_dir }}/firewall.tools
+
+for IP in "${IPAutor[@]}"; do
+    $ROUTE -n del "$IP" reject 2>/dev/null &
+done
+
+if [ -f {{ firewall_dir }}/firewall.block.ip ]; then
+    mapfile -t IPBlock < {{ firewall_dir }}/firewall.block.ip
+    for IP in "${IPBlock[@]}"; do
+        $ROUTE -n del "$IP" reject 2>/dev/null &
+    done
+fi
+
+if command -v cscli >/dev/null 2>&1; then
+    cscli hub update >/dev/null 2>&1 &
+fi
+
+rm -f {{ firewall_dir }}/*.tmp {{ firewall_dir }}/*.ip.4 {{ firewall_dir }}/*.ip.6 {{ firewall_dir }}/*.white.4 {{ firewall_dir }}/*.white.6
+
+wait
+exit 0

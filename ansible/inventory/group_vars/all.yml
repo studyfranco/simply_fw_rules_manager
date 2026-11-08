@@ -1,0 +1,117 @@
+---
+# ==============================================================================
+# Global Configuration Variables for simply_* Ecosystem Deployment
+# ==============================================================================
+
+# Target Operating System defaults
+target_debian_codename_fallback: "trixie"
+known_debian_codenames:
+  - "bookworm"
+  - "bullseye"
+  - "trixie"
+  - "forky"
+  - "sid"
+
+# Essential Host Packages
+common_packages:
+  - "sudo"
+  - "iptables"
+  - "ipset"
+  - "xtables-addons-common"
+  - "xtables-addons-dkms"
+  - "portsentry"
+  - "ca-certificates"
+  - "curl"
+  - "wget"
+  - "jq"
+  - "cron"
+  - "gnupg"
+  - "rsync"
+  - "pigz"
+  - "openssl"
+
+# Dedicated Unprivileged Hook Executor User
+hookexecutor_user: "hookexecutor"
+hookexecutor_group: "hookexecutor"
+hookexecutor_home: "/home/hookexecutor"
+hookexecutor_ssh_key_type: "ed25519"
+hookexecutor_ssh_key_path: "{{ hookexecutor_home }}/.ssh/id_{{ hookexecutor_ssh_key_type }}"
+
+# SSH Server Port (Auto-detected from sshd_config or overridden)
+sshd_port: 22
+
+# Docker Daemon Configuration (/etc/docker/daemon.json)
+docker_daemon_config:
+  experimental: true
+  ipv6: true
+  ip6tables: true
+  live-restore: true
+  bip: "10.125.0.1/16"
+  fixed-cidr-v6: "fd10:1993:1000:1199::/112"
+  default-address-pools:
+    - base: "10.126.0.0/16"
+      size: 28
+    - base: "fd10:1993:1000:1200::/112"
+      size: 124
+  dns:
+    - "1.1.1.1"
+    - "8.8.8.8"
+
+# Docker Bridge Networks Topology
+docker_net_ext_name: "ext"
+docker_net_ext_ipv4_subnet: "10.124.0.0/16"
+docker_net_ext_ipv6_subnet: "fd10:1993:1000:1199::1:0/112"
+
+docker_net_isolate_name: "isolate"
+docker_net_isolate_ipv4_subnet: "10.123.0.0/16"
+docker_net_isolate_ipv6_subnet: "fd10:1993:1000:1199::2:0/112"
+docker_gateway_isolate_ip: "10.123.0.1"
+
+# Firewall Directory & System Locations
+firewall_dir: "/etc/firewall"
+compose_dir: "/srv/dockers/simply_firewall"
+
+# Service & Database Selection
+# database_type options: "sqlite" | "postgres_container" | "postgres_external"
+database_type: "sqlite"
+postgres_version: "18"
+postgres_container_name: "simply_postgres"
+postgres_db_name: "simply_security"
+postgres_user: "simply_admin"
+postgres_password: "" # Set or auto-generated if postgres is selected
+postgres_external_host: "10.123.0.1"
+postgres_external_port: 5432
+
+# simply_ip_vault Topology
+# vault_mode options: "local" | "remote"
+vault_mode: "local"
+deploy_simply_ip_vault: true
+vault_group_name: "Main_Ban"
+remote_vault_url: "https://vault.example.com"
+remote_vault_api_key: ""
+remote_vault_signing_secret: ""
+
+# Optional Ecosystem Components
+deploy_simply_ip_sync: false
+deploy_simply_ip_exporter: false
+
+# Hook Executor Network Exposure
+hook_executor_allow_ext_network: false
+
+# Container Images
+image_fw_rules_manager: "ghcr.io/studyfranco/simply_fw_rules_manager:master"
+image_hook_executor: "ghcr.io/studyfranco/simply_hook_executor:master"
+image_fail2ban: "lscr.io/linuxserver/fail2ban:latest"
+image_ip_vault: "ghcr.io/studyfranco/simply_ip_vault:master"
+image_ip_sync: "ghcr.io/studyfranco/simply_ip_sync:master"
+image_ip_exporter: "ghcr.io/studyfranco/simply_ip_exporter:master"
+
+# Systemd Timers & Scheduled Automation
+enable_blocklist_update_timer: true
+blocklist_update_schedule: "*-*-* 03:00:00"
+
+enable_daily_reload_timer: true
+daily_reload_schedule: "*-*-* 04:00:00"
+
+enable_container_update_timer: true
+container_update_schedule: "Mon *-*-* 05:00:00"

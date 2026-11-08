@@ -1,0 +1,17 @@
+[Unit]
+Description=Simply Linux Packet Filter Firewall (iptables/ip6tables)
+Documentation=https://github.com/studyfranco/simply_fw_rules_manager
+DefaultDependencies=no
+Before=network.target network-pre.target
+Wants=network-pre.target
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart={{ firewall_dir }}/firewall start
+ExecReload={{ firewall_dir }}/firewall reload
+ExecStop={{ firewall_dir }}/firewall stop
+
+[Install]
+WantedBy=multi-user.target network.target

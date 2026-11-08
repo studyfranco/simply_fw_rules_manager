@@ -1,0 +1,214 @@
+# ==============================================================================
+# Managed by Ansible: Simply Firewall Ecosystem Docker Compose
+# ==============================================================================
+services:
+
+{% if database_type == 'postgres_container' %}
+  postgres:
+    image: postgres:{{ postgres_version }}-alpine
+    container_name: {{ postgres_container_name }}
+    hostname: postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB={{ postgres_db_name }}
+      - POSTGRES_USER={{ postgres_user }}
+      - POSTGRES_PASSWORD={{ postgres_password }}
+    volumes:
+      - {{ compose_dir }}/postgres_data:/var/lib/postgresql/data:rw
+    networks:
+      - {{ docker_net_isolate_name }}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{ postgres_user }} -d {{ postgres_db_name }}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+{% endif %}
+
+  simply_fw_rules_manager:
+    image: {{ image_fw_rules_manager }}
+    container_name: simply_fw_rules_manager
+    hostname: simply_fw_rules_manager
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3004:3000"
+    environment:
+      - TZ=Europe/Paris
+      - RUST_LOG=info
+{% if database_type == 'postgres_container' %}
+      - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_container_name }}:5432/{{ postgres_db_name }}
+{% elif database_type == 'postgres_external' %}
+      - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_external_host }}:{{ postgres_external_port }}/{{ postgres_db_name }}
+{% else %}
+      - DATABASE_URL=sqlite:///app/data/simply_fw_rules_manager.db?mode=rwc
+{% endif %}
+      - HOOK_EXECUTOR_URL=http://simply_hook_executor:3000
+    volumes:
+      - {{ compose_dir }}/config_simply_fw_rules_manager:/app/data:rw
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - {{ firewall_dir }}:/etc/firewall:rw
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - {{ docker_net_isolate_name }}
+{% if database_type == 'postgres_container' %}
+    depends_on:
+      postgres:
+        condition: service_healthy
+{% endif %}
+
+  simply_hook_executor:
+    image: {{ image_hook_executor }}
+    container_name: simply_hook_executor
+    hostname: simply_hook_executor
+    restart: unless-stopped
+    user: "1127:1127"
+    expose:
+      - "3000"
+    environment:
+      - TZ=Europe/Paris
+      - RUST_LOG=warn
+{% if database_type == 'postgres_container' %}
+      - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_container_name }}:5432/{{ postgres_db_name }}
+{% elif database_type == 'postgres_external' %}
+      - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_external_host }}:{{ postgres_external_port }}/{{ postgres_db_name }}
+{% else %}
+      - DATABASE_URL=sqlite:///config/simply_hook_executor.db?mode=rwc
+{% endif %}
+      - SIGNING_SECRET_KEY={{ hook_executor_signing_secret }}
+      - REQUIRE_SIGNED_REQUESTS=false
+      - ALLOWED_ENV_VARS=PATH,LANG,TERM
+    volumes:
+      - {{ compose_dir }}/config_simply_hook_executor:/config:rw
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - {{ docker_net_isolate_name }}
+{% if hook_executor_allow_ext_network %}
+      - {{ docker_net_ext_name }}
+{% endif %}
+{% if database_type == 'postgres_container' %}
+    depends_on:
+      postgres:
+        condition: service_healthy
+{% endif %}
+
+  fail2ban:
+    image: {{ image_fail2ban }}
+    container_name: fail2ban
+    hostname: fail2ban
+    restart: unless-stopped
+    read_only: true
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - TZ=Europe/Paris
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/log:/var/log:ro
+      - {{ compose_dir }}/config_fail2ban/jail.local:/config/jail.local:ro
+      - {{ compose_dir }}/config_fail2ban/action.d:/config/action.d:ro
+    tmpfs:
+      - /run:mode=777
+      - /tmp:mode=777
+    networks:
+      - {{ docker_net_isolate_name }}
+    depends_on:
+      - simply_hook_executor
+
+{% if deploy_simply_ip_vault and vault_mode == 'local' %}
+  simply_ip_vault:
+    image: {{ image_ip_vault }}
+    container_name: simply_ip_vault
+    hostname: simply_ip_vault
+    restart: unless-stopped
+    user: "1124:1124"
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - TZ=Europe/Paris
+      - RUST_LOG=warn
+{% if database_type == 'postgres_container' %}
+      - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_container_name }}:5432/{{ postgres_db_name }}
+{% elif database_type == 'postgres_external' %}
+      - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_external_host }}:{{ postgres_external_port }}/{{ postgres_db_name }}
+{% else %}
+      - DATABASE_URL=sqlite:///config/simply_ip_vault.db?mode=rwc
+{% endif %}
+      - ALLOW_PRIVATE_WEBHOOKS=true
+      - VAULT_ENCRYPTION_KEY={{ vault_encryption_key }}
+    volumes:
+      - {{ compose_dir }}/config_simply_ip_vault:/config:rw
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - {{ docker_net_isolate_name }}
+      - {{ docker_net_ext_name }}
+{% if database_type == 'postgres_container' %}
+    depends_on:
+      postgres:
+        condition: service_healthy
+{% endif %}
+{% endif %}
+
+{% if deploy_simply_ip_sync %}
+  simply_ip_sync:
+    image: {{ image_ip_sync }}
+    container_name: simply_ip_sync
+    hostname: simply_ip_sync
+    restart: unless-stopped
+    user: "1126:1126"
+    ports:
+      - "127.0.0.1:3003:3003"
+    environment:
+      - TZ=Europe/Paris
+      - RUST_LOG=warn
+{% if database_type == 'postgres_container' %}
+      - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_container_name }}:5432/{{ postgres_db_name }}
+{% elif database_type == 'postgres_external' %}
+      - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_external_host }}:{{ postgres_external_port }}/{{ postgres_db_name }}
+{% else %}
+      - DATABASE_URL=sqlite:///config/simply_ip_sync.db?mode=rwc
+{% endif %}
+      - SYNC_ENCRYPTION_KEY={{ sync_encryption_key }}
+      - ALLOW_PRIVATE_WEBHOOKS=true
+    volumes:
+      - {{ compose_dir }}/config_simply_ip_sync:/config:rw
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - {{ docker_net_ext_name }}
+      - {{ docker_net_isolate_name }}
+{% endif %}
+
+{% if deploy_simply_ip_exporter %}
+  simply_ip_exporter:
+    image: {{ image_ip_exporter }}
+    container_name: simply_ip_exporter
+    hostname: simply_ip_exporter
+    restart: unless-stopped
+    user: "1125:1125"
+    ports:
+      - "127.0.0.1:3002:3002"
+    environment:
+      - TZ=Europe/Paris
+      - RUST_LOG=warn
+{% if database_type == 'postgres_container' %}
+      - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_container_name }}:5432/{{ postgres_db_name }}
+{% elif database_type == 'postgres_external' %}
+      - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_external_host }}:{{ postgres_external_port }}/{{ postgres_db_name }}
+{% else %}
+      - DATABASE_URL=sqlite:///config/simply_ip_exporter.db?mode=rwc
+{% endif %}
+      - EXPORTER_ENCRYPTION_KEY={{ exporter_encryption_key }}
+      - VAULT_BASE_URL={{ effective_vault_url }}
+      - VAULT_API_KEY={{ effective_vault_api_key }}
+      - VAULT_SIGNING_SECRET={{ effective_vault_signing_secret }}
+    volumes:
+      - {{ compose_dir }}/config_simply_ip_exporter:/config:rw
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - {{ docker_net_ext_name }}
+      - {{ docker_net_isolate_name }}
+{% endif %}
+
+networks:
+  {{ docker_net_isolate_name }}:
+    external: true
+  {{ docker_net_ext_name }}:
+    external: true

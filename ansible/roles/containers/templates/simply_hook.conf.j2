@@ -1,0 +1,11 @@
+# Fail2Ban action calling simply_hook_executor via Docker internal isolate network
+[Definition]
+actionstart =
+actionstop =
+actioncheck =
+actionban = curl -fsS -X POST \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: {{ hook_executor_api_key }}" \
+    -d '{"target_ip":"<ip>","cause":"fail2ban-<name>"}' \
+    http://simply_hook_executor:3000/api/hooks/{{ hook_id_report }}/execute || true
+actionunban =

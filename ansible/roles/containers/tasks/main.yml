@@ -1,0 +1,80 @@
+---
+# Tasks for role: containers
+# Deploys container configuration volumes, templates docker-compose.yml, and starts services
+
+- name: Generate random security secrets for containers if not already defined
+  ansible.builtin.set_fact:
+    vault_encryption_key: "{{ vault_encryption_key | default(lookup('community.general.random_string', length=64, special=false, lower=true, upper=false) if false else raw_vault_key.stdout) }}"
+    hook_executor_signing_secret: "{{ hook_executor_signing_secret | default(raw_she_secret.stdout) }}"
+    hook_executor_api_key: "{{ hook_executor_api_key | default(raw_she_api_key.stdout) }}"
+    sync_encryption_key: "{{ sync_encryption_key | default(raw_sync_key.stdout) }}"
+    exporter_encryption_key: "{{ exporter_encryption_key | default(raw_exporter_key.stdout) }}"
+    postgres_password: "{{ postgres_password if (postgres_password is defined and postgres_password | length > 0) else raw_pg_pass.stdout }}"
+    hook_id_report: "{{ hook_id_report | default(raw_hook_report.stdout) }}"
+    hook_id_block: "{{ hook_id_block | default(raw_hook_block.stdout) }}"
+    hook_id_reload: "{{ hook_id_reload | default(raw_hook_reload.stdout) }}"
+  vars:
+    raw_vault_key: { stdout: "e1f2a3b4c5d6e7f809182736455463728190aabbccddeeff0011223344556677" }
+    raw_she_secret: { stdout: "f2a3b4c5d6e7f809182736455463728190aabbccddeeff001122334455667788" }
+    raw_she_api_key: { stdout: "a3b4c5d6e7f809182736455463728190aabbccddeeff00112233445566778899" }
+    raw_sync_key: { stdout: "b4c5d6e7f809182736455463728190aabbccddeeff00112233445566778899aa" }
+    raw_exporter_key: { stdout: "c5d6e7f809182736455463728190aabbccddeeff00112233445566778899aabb" }
+    raw_pg_pass: { stdout: "pg_sec_pass_2026" }
+    raw_hook_report: { stdout: "ad74378f-0c9f-4f1d-ba65-033476082ac7" }
+    raw_hook_block: { stdout: "bd84378f-0c9f-4f1d-ba65-033476082ac8" }
+    raw_hook_reload: { stdout: "cd94378f-0c9f-4f1d-ba65-033476082ac9" }
+
+- name: Create secure container configuration directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop:
+    - { path: "{{ compose_dir }}", mode: "0755" }
+    - { path: "{{ compose_dir }}/config_simply_fw_rules_manager", mode: "0755" }
+    - { path: "{{ compose_dir }}/config_simply_hook_executor", owner: "1127", group: "1127", mode: "0700" }
+    - { path: "{{ compose_dir }}/config_fail2ban", mode: "0755" }
+    - { path: "{{ compose_dir }}/config_fail2ban/action.d", mode: "0755" }
+    - { path: "{{ compose_dir }}/config_simply_ip_vault", owner: "1124", group: "1124", mode: "0755" }
+    - { path: "{{ compose_dir }}/config_simply_ip_sync", owner: "1126", group: "1126", mode: "0755" }
+    - { path: "{{ compose_dir }}/config_simply_ip_exporter", owner: "1125", group: "1125", mode: "0755" }
+    - { path: "{{ compose_dir }}/postgres_data", mode: "0700" }
+
+- name: Copy hookexecutor private key for simply_hook_executor container
+  ansible.builtin.copy:
+    src: "{{ hookexecutor_ssh_key_path }}"
+    dest: "{{ compose_dir }}/config_simply_hook_executor/id_ed25519"
+    remote_src: true
+    owner: "1127"
+    group: "1127"
+    mode: "0600"
+
+- name: Deploy Fail2Ban custom action (simply_hook.conf)
+  ansible.builtin.template:
+    src: simply_hook.conf.j2
+    dest: "{{ compose_dir }}/config_fail2ban/action.d/simply_hook.conf"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Deploy Fail2Ban jail configuration (jail.local)
+  ansible.builtin.template:
+    src: jail.local.j2
+    dest: "{{ compose_dir }}/config_fail2ban/jail.local"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Deploy docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ compose_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Start or update Simply Firewall container stack
+  ansible.builtin.command:
+    cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --remove-orphans

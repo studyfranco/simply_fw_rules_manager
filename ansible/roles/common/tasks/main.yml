@@ -1,0 +1,67 @@
+---
+# Tasks for role: common
+# Prepares host system, validates Debian release, and installs core packages
+
+- name: Assert supported Debian operating system
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == "Debian"
+    fail_msg: "This Ansible suite currently targets Debian distributions only (detected {{ ansible_os_family }})."
+
+- name: Detect Debian version codename from /etc/os-release
+  ansible.builtin.shell:
+    cmd: '. /etc/os-release && echo "$VERSION_CODENAME"'
+  register: raw_os_release_codename
+  changed_when: false
+  check_mode: false
+
+- name: Determine effective Debian codename with fallback
+  ansible.builtin.set_fact:
+    debian_codename: >-
+      {{
+        raw_os_release_codename.stdout
+        if (raw_os_release_codename.stdout is defined and raw_os_release_codename.stdout in known_debian_codenames)
+        else (ansible_distribution_release if ansible_distribution_release in known_debian_codenames else target_debian_codename_fallback)
+      }}
+
+- name: Display detected system architecture and Debian codename
+  ansible.builtin.debug:
+    msg: "Target host: {{ inventory_hostname }} | Architecture: {{ ansible_architecture }} | Codename: {{ debian_codename }}"
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install essential host security and utility packages
+  ansible.builtin.apt:
+    name: "{{ common_packages }}"
+    state: present
+    install_recommends: false
+
+- name: Configure Linux kernel sysctl parameters for routing and firewalling
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+  loop:
+    - { name: "net.ipv4.ip_forward", value: "1" }
+    - { name: "net.ipv6.conf.all.forwarding", value: "1" }
+    - { name: "net.ipv4.conf.all.route_localnet", value: "1" }
+
+- name: Ensure target firewall directory exists with restricted root permissions
+  ansible.builtin.file:
+    path: "{{ firewall_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Ensure compose project directory exists
+  ansible.builtin.file:
+    path: "{{ compose_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"

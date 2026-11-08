@@ -1,0 +1,49 @@
+#!/bin/bash
+# ==============================================================================
+# Managed by Ansible: Simply Firewall Reporting to simply_ip_vault
+# Permissions: 0700 root:root (Executable by root and hookexecutor via sudo)
+# ==============================================================================
+
+source {{ firewall_dir }}/firewall.settings
+source {{ firewall_dir }}/firewall.tools
+
+TARGET="$1"
+CAUSE="${2:-Manual_Report}"
+
+URL_API="{{ effective_vault_url }}"
+USER_KEY="{{ effective_vault_api_key }}"
+SECRET="{{ effective_vault_signing_secret }}"
+GROUP_NAME="{{ vault_group_name }}"
+
+if [ -z "$TARGET" ]; then
+    echo "Usage: $0 <target_ip> [cause]" >&2
+    exit 1
+fi
+
+call() {
+    local method="$1" path="$2" body="${3:-}"
+    local ts
+    ts=$(date -u +%s)
+    # CANONICAL_V1: real newlines between the four fields, none at the end.
+    local sig
+    sig=$(printf '%s\n%s\n%s\n%s' "$method" "${path%%\?*}" "$ts" "$body" \
+          | openssl dgst -sha256 -hmac "${SECRET}" | sed 's/^.*= //')
+    curl --retry 5 --retry-delay 3 --retry-connrefused -sS -X "$method" \
+        -H "X-API-Key: ${USER_KEY}" \
+        -H "X-Timestamp: $ts" \
+        -H "X-Signature-256: sha256=${sig}" \
+        ${body:+-H "Content-Type: application/json" -d "$body"} \
+        "${URL_API}${path}"
+}
+
+if ! ip addr show | grep -wq "${TARGET}"; then
+    if is_ipv4 "${TARGET}"; then
+        call POST /api/ban \
+            "{\"target_address\": \"${TARGET}\", \"group_name\": \"${GROUP_NAME}\", \"cause\": \"${CAUSE}\"}"
+    elif is_ipv6 "${TARGET}"; then
+        call POST /api/ban \
+            "{\"target_address\": \"${TARGET}/48\", \"group_name\": \"${GROUP_NAME}\", \"cause\": \"${CAUSE}\"}"
+    fi
+fi
+
+exit 0

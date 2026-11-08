@@ -1,0 +1,133 @@
+---
+# Tasks for role: firewall
+# Deploys optimized firewall scripts with lock wait flags, and sets up systemd services and timers
+
+- name: Deploy firewall.tools system library
+  ansible.builtin.copy:
+    src: firewall.tools
+    dest: "{{ firewall_dir }}/firewall.tools"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy core firewall packet filtering script
+  ansible.builtin.copy:
+    src: firewall
+    dest: "{{ firewall_dir }}/firewall"
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Deploy firewall.set.ip ipset and GeoIP loader
+  ansible.builtin.copy:
+    src: firewall.set.ip
+    dest: "{{ firewall_dir }}/firewall.set.ip"
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Deploy initial firewall.settings configuration
+  ansible.builtin.template:
+    src: firewall.settings.j2
+    dest: "{{ firewall_dir }}/firewall.settings"
+    owner: root
+    group: root
+    mode: "0600"
+    force: false # Preserve existing configuration if already customized
+
+- name: Deploy firewall.rules.special with Hook Executor SSH access
+  ansible.builtin.template:
+    src: firewall.rules.special.j2
+    dest: "{{ firewall_dir }}/firewall.rules.special"
+    owner: root
+    group: root
+    mode: "0700"
+    force: false
+
+- name: Deploy firewall.report HMAC reporting client
+  ansible.builtin.template:
+    src: firewall.report.j2
+    dest: "{{ firewall_dir }}/firewall.report"
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Deploy firewall.launch.block.ip fast block runner
+  ansible.builtin.template:
+    src: firewall.launch.block.ip.j2
+    dest: "{{ firewall_dir }}/firewall.launch.block.ip"
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Deploy firewall.get.list threat feeds and whitelist downloader
+  ansible.builtin.template:
+    src: firewall.get.list.j2
+    dest: "{{ firewall_dir }}/firewall.get.list"
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Deploy firewall.clean.block.ip cleanup script
+  ansible.builtin.template:
+    src: firewall.clean.block.ip.j2
+    dest: "{{ firewall_dir }}/firewall.clean.block.ip"
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Ensure blocklist record files exist with restricted permissions
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
+    modification_time: preserve
+    access_time: preserve
+  loop:
+    - "{{ firewall_dir }}/firewall.block.ip"
+    - "{{ firewall_dir }}/firewall.block.ip6"
+
+- name: Deploy systemd service units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/systemd/system/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { src: "firewall.service.j2", dest: "firewall.service" }
+    - { src: "firewall-set-ip.service.j2", dest: "firewall-set-ip.service" }
+    - { src: "firewall-update-blocklists.service.j2", dest: "firewall-update-blocklists.service" }
+    - { src: "firewall-update-blocklists.timer.j2", dest: "firewall-update-blocklists.timer" }
+    - { src: "firewall-daily-reload.service.j2", dest: "firewall-daily-reload.service" }
+    - { src: "firewall-daily-reload.timer.j2", dest: "firewall-daily-reload.timer" }
+    - { src: "simply-containers-update.service.j2", dest: "simply-containers-update.service" }
+    - { src: "simply-containers-update.timer.j2", dest: "simply-containers-update.timer" }
+  notify: Reload systemd daemon
+
+- name: Flush handlers to register systemd units immediately
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start core firewall systemd service
+  ansible.builtin.service:
+    name: firewall
+    state: started
+    enabled: true
+
+- name: Enable and start firewall-set-ip systemd service
+  ansible.builtin.service:
+    name: firewall-set-ip
+    state: started
+    enabled: true
+
+- name: Enable and start scheduled systemd timers
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - firewall-update-blocklists.timer
+    - firewall-daily-reload.timer
+    - simply-containers-update.timer

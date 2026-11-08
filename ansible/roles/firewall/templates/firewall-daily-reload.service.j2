@@ -1,0 +1,8 @@
+[Unit]
+Description=Simply Firewall Daily Full Restart and Rules Reload
+Documentation=https://github.com/studyfranco/simply_fw_rules_manager
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c "{{ firewall_dir }}/firewall all-restart && {{ firewall_dir }}/firewall reload-rules"

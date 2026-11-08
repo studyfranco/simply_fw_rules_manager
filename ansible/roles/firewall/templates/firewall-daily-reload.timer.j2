@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Timer for Simply Firewall Full Reload
+Documentation=https://github.com/studyfranco/simply_fw_rules_manager
+Requires=firewall-daily-reload.service
+
+[Timer]
+OnCalendar={{ daily_reload_schedule }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

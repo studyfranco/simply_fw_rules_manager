@@ -1,0 +1,7 @@
+---
+- name: Step 4 - Container Stack Deployment
+  hosts: security_nodes
+  become: true
+  gather_facts: true
+  roles:
+    - role: containers

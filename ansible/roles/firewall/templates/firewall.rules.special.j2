@@ -1,0 +1,28 @@
+#!/bin/bash
+# ==============================================================================
+# Managed by Ansible: Special Rules & Custom Container Bindings
+# Permissions: 0700 root:root
+# ==============================================================================
+
+source {{ firewall_dir }}/firewall.settings
+source {{ firewall_dir }}/firewall.tools
+
+# ------------------------------------------------------------------------------
+# Hook Executor Host Access
+# Allows simply_hook_executor in the 'isolate' Docker network to access host SSH
+# ------------------------------------------------------------------------------
+insert_rules_with_test_ok_ipv4 "-I INPUT 1 -i {{ docker_net_isolate_name }} -s {{ docker_net_isolate_ipv4_subnet }} -d {{ docker_gateway_isolate_ip }} -p tcp --dport {{ effective_sshd_port }} -m state --state NEW,ESTABLISHED -j ACCEPT" ""
+insert_rules_with_test_ok_ipv6 "-I INPUT 1 -i {{ docker_net_isolate_name }} -s {{ docker_net_isolate_ipv6_subnet }} -p tcp --dport {{ effective_sshd_port }} -m state --state NEW,ESTABLISHED -j ACCEPT" ""
+
+# ------------------------------------------------------------------------------
+# Custom Rules & Dynamic Helpers
+# ------------------------------------------------------------------------------
+add_special_access() {
+    # Add any site-specific ipset or container rules here
+    return 0
+}
+
+add_special_access
+
+wait
+exit 0

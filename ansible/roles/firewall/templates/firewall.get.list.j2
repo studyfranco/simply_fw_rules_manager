@@ -1,0 +1,109 @@
+#!/bin/bash
+# ==============================================================================
+# Managed by Ansible: Threat Intelligence & Whitelist Synchronization
+# Permissions: 0700 root:root
+# ==============================================================================
+
+source {{ firewall_dir }}/firewall.settings
+source {{ firewall_dir }}/firewall.tools
+
+generate_list()
+{
+    local TARGET
+    local URL=$1
+    local begin_file=$2
+
+    local tmp_4="{{ firewall_dir }}/${begin_file}.ip.4.tmp"
+    local tmp_6="{{ firewall_dir }}/${begin_file}.ip.6.tmp"
+    local final_4="{{ firewall_dir }}/${begin_file}.ip.4"
+    local final_6="{{ firewall_dir }}/${begin_file}.ip.6"
+
+    : > "${tmp_4}"
+    : > "${tmp_6}"
+    for TARGET in $(curl --max-time 60 -sS "${URL}" 2>/dev/null | grep -v "^#" | cut -d " " -f 1); do
+        if is_ipv4 "${TARGET}" || is_ipv4_net "${TARGET}"; then
+            echo "${TARGET}" >> "${tmp_4}"
+        elif is_ipv6 "${TARGET}" || is_ipv6_net "${TARGET}"; then
+            echo "${TARGET}" >> "${tmp_6}"
+        fi
+    done
+
+    if [ -s "${tmp_4}" ]; then
+        mv "${tmp_4}" "${final_4}"
+    else
+        rm -f "${tmp_4}"
+    fi
+
+    if [ -s "${tmp_6}" ]; then
+        mv "${tmp_6}" "${final_6}"
+    else
+        rm -f "${tmp_6}"
+    fi
+}
+
+generate_whitelist()
+{
+    local TARGET
+    local URL=$1
+    local begin_file=$2
+
+    local tmp_4="{{ firewall_dir }}/${begin_file}.white.4.tmp"
+    local tmp_6="{{ firewall_dir }}/${begin_file}.white.6.tmp"
+    local final_4="{{ firewall_dir }}/${begin_file}.white.4"
+    local final_6="{{ firewall_dir }}/${begin_file}.white.6"
+
+    : > "${tmp_4}"
+    : > "${tmp_6}"
+    for TARGET in $(curl --max-time 60 -sS "${URL}" 2>/dev/null | grep -v "^#" | cut -d " " -f 1); do
+        if is_ipv4 "${TARGET}" || is_ipv4_net "${TARGET}"; then
+            echo "${TARGET}" >> "${tmp_4}"
+        elif is_ipv6 "${TARGET}" || is_ipv6_net "${TARGET}"; then
+            echo "${TARGET}" >> "${tmp_6}"
+        fi
+    done
+
+    if [ -s "${tmp_4}" ]; then
+        mv "${tmp_4}" "${final_4}"
+    else
+        rm -f "${tmp_4}"
+    fi
+
+    if [ -s "${tmp_6}" ]; then
+        mv "${tmp_6}" "${final_6}"
+    else
+        rm -f "${tmp_6}"
+    fi
+}
+
+# Standard Threat Feeds (Runs in parallel)
+generate_list "https://gist.githubusercontent.com/BBcan177/bf29d47ea04391cb3eb0/raw" "mal_potential" &
+generate_list "https://myip.ms/files/blacklist/csf/latest_blacklist.txt" "myip_blacklist" &
+generate_list "https://raw.githubusercontent.com/stamparm/maltrail/refs/heads/master/data/mass_scanner.txt" "mass_scanner" &
+generate_list "http://lists.blocklist.de/lists/all.txt" "blocklistde" &
+generate_list "https://www.spamhaus.org/drop/dropv6.txt" "spamhaus" &
+generate_list "https://www.dan.me.uk/torlist/?full" "tor" &
+generate_list "http://blocklist.greensnow.co/greensnow.txt" "greensnow" &
+generate_list "https://rules.emergingthreats.net/blockrules/compromised-ips.txt" "emergin" &
+generate_list "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt" "emerginIps" &
+
+{% if effective_exporter_feed_url is defined and effective_exporter_feed_url | length > 0 %}
+# Simply IP Exporter Local / Remote Feed
+generate_list "{{ effective_exporter_feed_url }}" "local_abuse" &
+{% endif %}
+
+{% if effective_whitelist_feed_url is defined and effective_whitelist_feed_url | length > 0 %}
+# Simply Whitelist Feed
+generate_whitelist "{{ effective_whitelist_feed_url }}" "remote_whitelist" &
+{% endif %}
+
+wait
+
+# Aggregate blocklists
+cat {{ firewall_dir }}/*.ip.4 > {{ firewall_dir }}/to_block.ipv4 2>/dev/null
+cat {{ firewall_dir }}/*.ip.6 > {{ firewall_dir }}/to_block.ipv6 2>/dev/null
+
+# Aggregate whitelists
+cat {{ firewall_dir }}/*.white.4 > {{ firewall_dir }}/to_allow.ipv4 2>/dev/null
+cat {{ firewall_dir }}/*.white.6 > {{ firewall_dir }}/to_allow.ipv6 2>/dev/null
+
+exit 0

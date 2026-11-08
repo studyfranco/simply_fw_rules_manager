@@ -1,0 +1,56 @@
+#!/bin/bash
+# ==============================================================================
+# Managed by Ansible: Immediate IP/CIDR Block Action
+# Permissions: 0700 root:root (Executable by root and hookexecutor via sudo)
+# ==============================================================================
+
+source {{ firewall_dir }}/firewall.settings
+source {{ firewall_dir }}/firewall.tools
+
+hosts_deny_file="/etc/hosts.deny"
+
+TARGET="$1"
+CAUSE="${2:-Confirmed_Threat}"
+
+if [ -z "$TARGET" ]; then
+    echo "Usage: $0 <target_ip_or_cidr> [cause]" >&2
+    exit 1
+fi
+
+if ! ip addr show | grep -wq "${TARGET}"; then
+    if command -v cscli >/dev/null 2>&1; then
+        timeout 300 /bin/cscli decisions add -i "${TARGET}" --duration 100000h --reason "${CAUSE}" >/dev/null 2>&1 &
+    fi
+fi
+
+if command -v fail2ban-client >/dev/null 2>&1; then
+    /usr/bin/fail2ban-client set sshd unbanip "${TARGET}" 2>/dev/null &
+    /usr/bin/fail2ban-client set recidive unbanip "${TARGET}" 2>/dev/null &
+fi
+
+if is_ipv4 "${TARGET}"; then
+    if ! ip addr show | grep -wq "${TARGET}"; then
+        $ROUTE add -host "${TARGET}" reject 2>/dev/null
+        $IPS add "$IPSLISTBADIP" "${TARGET}" -exist 2>/dev/null &
+        /bin/echo "${TARGET}" | tee -a {{ firewall_dir }}/firewall.block.ip >/dev/null &
+        $DUMPCO -k src "${TARGET}" >/dev/null 2>&1 &
+        $DUMPCO -k dst "${TARGET}" >/dev/null 2>&1 &
+    fi
+    $ROUTE -n del "${TARGET}" reject 2>/dev/null
+elif is_ipv6 "${TARGET}"; then
+    if ! ip addr show | grep -wq "${TARGET}"; then
+        $ROUTE -6 add -host "${TARGET}" reject 2>/dev/null
+        $IPS add "${IPSLISTBADIP}6" "${TARGET}/48" -exist 2>/dev/null &
+        /bin/echo "${TARGET}/48" | tee -a {{ firewall_dir }}/firewall.block.ip6 >/dev/null &
+        $DUMPCO -6 -k src "${TARGET}" >/dev/null 2>&1 &
+        $DUMPCO -6 -k dst "${TARGET}" >/dev/null 2>&1 &
+    fi
+    $ROUTE -6 -n del "${TARGET}" reject 2>/dev/null
+fi
+
+if [ -f "${hosts_deny_file}" ]; then
+    $SED -i "/^ALL: ${TARGET} : DENY/d" "${hosts_deny_file}" 2>/dev/null
+fi
+
+wait
+exit 0

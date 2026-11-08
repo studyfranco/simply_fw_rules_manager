@@ -1,0 +1,20 @@
+[DEFAULT]
+bantime = 1h
+findtime = 10m
+maxretry = 5
+banaction = simply_hook
+banaction_allports = simply_hook
+backend = auto
+
+[sshd]
+enabled = true
+port = {{ effective_sshd_port }}
+logpath = /var/log/auth.log
+
+[recidive]
+enabled = true
+logpath = /var/log/fail2ban.log
+banaction = simply_hook
+bantime = 1w
+findtime = 1d
+maxretry = 3

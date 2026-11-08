@@ -6,3 +6,5 @@ target/*
 *.db-shm
 .claude/*
 example/*
+ansible/inventory/hosts.ini
+ansible/*.retry

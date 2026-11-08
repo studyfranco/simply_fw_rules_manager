@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Timer for Simply Firewall Threat Feeds Sync
+Documentation=https://github.com/studyfranco/simply_fw_rules_manager
+Requires=firewall-update-blocklists.service
+
+[Timer]
+OnCalendar={{ blocklist_update_schedule }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
