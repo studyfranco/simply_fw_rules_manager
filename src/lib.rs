@@ -47,6 +47,8 @@ pub fn create_app(state: AppState) -> Router {
         )
         .route("/audit", get(api::audit::list_audit_logs))
         .route("/audit-logs", get(api::audit::list_audit_logs))
+        .route("/system/settings", get(api::get_system_settings))
+        .route("/settings", get(api::get_system_settings))
         .route(
             "/firewall/settings",
             get(api::settings::get_settings).put(api::settings::update_settings),
