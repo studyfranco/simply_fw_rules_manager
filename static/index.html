@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Simply FW Rules Manager</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- ═══════════════════════════════════════ -->
+  <!-- Login                                    -->
+  <!-- ═══════════════════════════════════════ -->
+  <section id="login-screen" class="login-screen">
+    <div class="login-card">
+      <div class="logo">
+        <div class="logo-icon"></div>
+        <h1>Simply FW Rules Manager</h1>
+      </div>
+      <h2>Linux Netfilter &amp; Docker Firewall Orchestrator</h2>
+      <p class="subtitle">Enter your API key and its signing secret to access the dashboard. Every
+        request is signed client-side (CANONICAL_V1 HMAC-SHA256) — the secret never leaves this
+        page except as part of a signature.</p>
+      <form id="login-form" class="login-form">
+        <div class="form-group">
+          <label for="login-api-key">API Key</label>
+          <input type="password" id="login-api-key" class="input-field" placeholder="Enter X-API-Key..." autocomplete="off" required>
+        </div>
+        <div class="form-group">
+          <label for="login-signing-secret">Signing Secret</label>
+          <input type="password" id="login-signing-secret" class="input-field" placeholder="Enter HMAC signing secret..." autocomplete="off" required>
+          <small class="field-hint">Used locally to sign every request (HMAC-SHA256). Never transmitted.</small>
+        </div>
+        <div class="form-group">
+          <label for="login-api-base">API Base Path Override</label>
+          <input type="text" id="login-api-base" class="input-field" placeholder="/api" autocomplete="off">
+          <small class="field-hint">
+            Leave blank unless a reverse proxy forwards its mount prefix through untouched instead
+            of stripping it.
+          </small>
+        </div>
+        <button type="submit" class="btn btn-primary">Unlock Dashboard</button>
+      </form>
+      <div id="login-error" class="message error hidden"></div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════ -->
+  <!-- Dashboard                                -->
+  <!-- ═══════════════════════════════════════ -->
+  <div id="dashboard-container" class="hidden">
+
+    <div id="top-bar" class="top-bar">
+      <header class="header">
+        <div class="logo">
+          <div class="logo-icon"></div>
+          <h1>Simply FW Rules Manager</h1>
+        </div>
+        <div id="header-actions" class="header-actions">
+          <button id="btn-generate-files" type="button" class="btn btn-secondary btn-sm" title="Atomically write firewall.settings, firewall.rules.special and firewall.get.list to disk">Générer les fichiers</button>
+          <button id="btn-reload-fw" type="button" class="btn btn-secondary btn-sm" title="Trigger simply_hook_executor to reload the firewall">Recharger le Firewall</button>
+          <button id="btn-generate-and-reload" type="button" class="btn btn-primary btn-sm" title="Generate all 3 files and immediately reload the firewall via simply_hook_executor">Générer &amp; Appliquer</button>
+          <span id="identity-name" class="text-muted text-sm"></span>
+          <span id="identity-badge" class="badge badge-tier" title="Your key's RBAC tier"></span>
+          <button id="btn-refresh" type="button" class="btn btn-secondary btn-sm">Refresh</button>
+          <button id="btn-logout" type="button" class="btn btn-logout btn-sm" title="Also clears the saved session from this browser">Logout</button>
+        </div>
+      </header>
+
+      <nav class="tab-nav" role="tablist">
+        <button class="tab-btn active" data-tab="settings" role="tab" aria-selected="true">Interfaces &amp; Zones</button>
+        <button class="tab-btn" data-tab="docker" role="tab" aria-selected="false">Docker &amp; Inter-Conteneurs</button>
+        <button class="tab-btn" data-tab="special-rules" role="tab" aria-selected="false">Éditeur .rules.special</button>
+        <button class="tab-btn" data-tab="blocklists" role="tab" aria-selected="false">Blocklists .get.list</button>
+        <button class="tab-btn" data-tab="deploy" role="tab" aria-selected="false">Aperçu &amp; Hook Executor</button>
+        <button class="tab-btn" data-tab="keys" id="keys-tab-btn" role="tab" aria-selected="false">API Keys &amp; Permissions</button>
+        <button class="tab-btn" data-tab="audit-logs" id="audit-tab-btn" role="tab" aria-selected="false">Audit Logs</button>
+      </nav>
+    </div>
+
+    <div class="container">
+      <main id="tab-settings" class="tab-panel active"></main>
+      <main id="tab-docker" class="tab-panel"></main>
+      <main id="tab-special-rules" class="tab-panel"></main>
+      <main id="tab-blocklists" class="tab-panel"></main>
+      <main id="tab-deploy" class="tab-panel"></main>
+      <main id="tab-keys" class="tab-panel"></main>
+      <main id="tab-audit-logs" class="tab-panel"></main>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

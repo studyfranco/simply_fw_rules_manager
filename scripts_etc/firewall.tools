@@ -1,5 +1,7 @@
 #! /bin/bash
-#source /etc/firewall/firewall.settings
+# ==============================================================================
+# IMMUTABLE SYSTEM CONSTANTS & CHAIN/IPSET NAMES (Managed by firewall.tools)
+# ==============================================================================
 IPT=/sbin/iptables
 IPT6=/sbin/ip6tables
 IPS=/sbin/ipset
@@ -9,7 +11,91 @@ DUMPCO=/bin/ss
 DOCKER=/bin/docker
 IFCONFIG=/usr/sbin/ifconfig
 JQ=/usr/bin/jq
+FAILBAN=/usr/bin/fail2ban-client
 
+IPSLISTBADIP="bad_ip"
+IPSLISTGOODIP="good_ip"
+IPSLOCALIPS="l"
+IPSINTERNALIPS="i"
+IPSPLEXIPS="plex_ip"
+IPS6BASIC="ipv6_cast"
+IPSDOH="doh_serv"
+IPSLOCALS="generic_local"
+IPCCOPEN="open_cc_ips"
+IPSLISTGEOIPBLOCK="geoip_block"
+IPSLISTGEOIPBLOCK2="geoip_block2"
+
+CHAINIPALLOW="z-allow-ips"
+CHAINIPALLOWTCP="z-allow-ips-tcp"
+CHAINIPALLOWUDP="z-allow-ips-udp"
+
+CHAINICMPTRAFIC="z-icmp"
+
+CHAINDROPLOG="z-drop-log"
+CHAINDROPLOGSELECTOR="z-drop-log-select-trash"
+CHAINDROPLOGWITHOUTSELECTOR="z-drop-log-no-select-trash"
+
+CHAINPORTSENTRYOPENTCP="z-port-sentry-open-tcp"
+CHAINPORTSENTRYOPENUDP="z-port-sentry-open-udp"
+CHAINPORTSENTRYCLOSETCP="z-port-sentry-close-tcp"
+CHAINPORTSENTRYCLOSEUDP="z-port-sentry-close-udp"
+CHAINPORTSENTRYLOG="z-port-sentry-log"
+
+CHAINOPENSATE="z-open-state"
+CHAINOUTTRAFIC="z-output-rules"
+
+CHAINMAININTER="zz"
+
+CHAINMAINOUTINTERICMP="z-main-out-icmp"
+CHAINOPENDHCP="z-open-port-dhcp"
+
+CHAINOPENLOCALPORTTCP="z-open-local-tcp"
+CHAINOPENLOCALPORTUDP="z-open-local-udp"
+CHAINOPENLOCALPORTUDPDHCP="z-open-local-udp-dhcp"
+
+CHAINMAINOUTINTERCR="z-main-out-cr"
+CHAINOPENCRPORTTCP="z-main-out-cr-open-tcp"
+CHAINOPENCRPORTUDP="z-main-out-cr-open-udp"
+
+CHAINMAINOUTINTERWW="z-main-out-ww"
+CHAINOPENWWPORTTCP="z-main-out-ww-open-tcp"
+CHAINOPENWWPORTUDP="z-main-out-ww-open-udp"
+
+CHAINMAININTINTERICMP="z-main-inter-icmp"
+CHAINMAININTINTERTCP="z-main-inter-tcp"
+CHAINMAININTINTERUDP="z-main-inter-udp"
+CHAINMAININTINTERUDPDHCP="z-main-inter-udp-dhcp"
+
+CHAINDROPCAST="z-drop-cast"
+CHAINMAINOUTINTERDROPBADIPSRC="z-main-out-drop-bad-ip-src"
+CHAINMAINOUTINTERLOGBADIPDST="z-main-out-log-bad-ip-dst"
+CHAINMAINOUTINTERLOGBADIPDSTWB="z-main-out-log-dst-bad-ip"
+CHAINMAINOUTINTERLOGBADIPDSTWC="z-main-out-log-dst-crowd-ip"
+
+CHAINFORWARDFILTER="FORWARD-TRAFIC-FILTER"
+CHAINFORWARDFILTERTCP="FORWARD-TRAFIC-FILTER-TCP"
+CHAINFORWARDFILTERUDP="FORWARD-TRAFIC-FILTER-UDP"
+CHAINFORWARDFILTERICMP="FORWARD-TRAFIC-FILTER-ICM"
+CHAINFORWARDTRAFIC="FT"
+
+CHAINPATMAIN="z-redirect-main"
+CHAINPATLOG="z-redirect-log"
+CHAINPOSTROUTINGNAT="NAT-TRAFIC"
+
+saveFileGeoIPDB="/etc/firewall/GeoIPCountryWhois.csv"
+
+crowdsecSetIPBeginName="crowdsec-blacklists"
+crowdsecSetIP6BeginName="crowdsec6-blacklists"
+
+# Associative caches to avoid redundant `docker inspect` spawns during firewall reload
+declare -gA _FW_CACHE_BRIDGE_NAME=()
+declare -gA _FW_CACHE_NET_SUBNETS=()
+declare -gA _FW_CACHE_CONTAINER_IPV4=()
+declare -gA _FW_CACHE_CONTAINER_IPV6=()
+
+## @fn insert_rules
+## @usage insert_rules "<iptables_args>"
+## @desc Exécute simultanément une règle iptables (IPv4) et ip6tables (IPv6) en arrière-plan.
 insert_rules() # You can use it to remove rules too
 {
 	local cmd_args=$1 # -t nat -I ? -m ? -j ?
@@ -22,6 +108,9 @@ insert_rules() # You can use it to remove rules too
 	return 0
 }
 
+## @fn insert_rules_quietly
+## @usage insert_rules_quietly "<iptables_args>"
+## @desc Exécute simultanément une règle IPv4 et IPv6 en masquant stderr.
 insert_rules_quietly() # You can use it to remove rules too
 {
 	local cmd_args=$1 # -t nat -I ? -m ? -j ?
@@ -34,6 +123,9 @@ insert_rules_quietly() # You can use it to remove rules too
 	return 0
 }
 
+## @fn insert_rules_quietly_v4
+## @usage insert_rules_quietly_v4 "<iptables_args>"
+## @desc Exécute une règle IPv4 uniquement en masquant stderr.
 insert_rules_quietly_v4() # You can use it to remove rules too
 {
 	local cmd_args=$1 # -t nat -I ? -m ? -j ?
@@ -43,6 +135,9 @@ insert_rules_quietly_v4() # You can use it to remove rules too
 	return 0
 }
 
+## @fn insert_rules_quietly_v6
+## @usage insert_rules_quietly_v6 "<ip6tables_args>"
+## @desc Exécute une règle IPv6 uniquement en masquant stderr.
 insert_rules_quietly_v6() # You can use it to remove rules too
 {
 	local cmd_args=$1 # -t nat -I ? -m ? -j ?
@@ -52,48 +147,61 @@ insert_rules_quietly_v6() # You can use it to remove rules too
 	return 0
 }
 
+## @fn insert_rules_with_test_ok_ipv4
+## @usage insert_rules_with_test_ok_ipv4 "<cmd_args>" ["<fallback_args>"]
+## @desc Insère une règle IPv4 avec jusqu'à 5 tentatives en cas de verrou xtables, puis exécute un fallback optionnel.
 insert_rules_with_test_ok_ipv4()
 {
 	local cmd_args=$1 # -t nat -I ? -m ? -j ?
 	local cmd_args_back=$2
 	local i=0
-	$IPT $cmd_args > /dev/null 2>&1
-	while [ $? -ne 0 ] && [ $i -le 5 ]; do
+	local rc=0
+	$IPT $cmd_args > /dev/null 2>&1 || rc=$?
+	while [ $rc -ne 0 ] && [ $i -le 5 ]; do
 		((i++))
 		sleep 1
-		$IPT $cmd_args > /dev/null 2>&1
+		rc=0
+		$IPT $cmd_args > /dev/null 2>&1 || rc=$?
 	done
-	if [ $? -ne 0 ]; then
+	if [ $rc -ne 0 ]; then
 		$IPT $cmd_args
 		echo "Bugged v4 $cmd_args"
-		if [ ! -z "$cmd_args_back" ]; then
+		if [ -n "$cmd_args_back" ]; then
 			$IPT $cmd_args_back || echo "Bugged backup v4 $cmd_args"
 		fi
 	fi
 	return 0
 }
 
+## @fn insert_rules_with_test_ok_ipv6
+## @usage insert_rules_with_test_ok_ipv6 "<cmd_args>" ["<fallback_args>"]
+## @desc Insère une règle IPv6 avec jusqu'à 5 tentatives en cas de verrou xtables, puis exécute un fallback optionnel.
 insert_rules_with_test_ok_ipv6()
 {
 	local cmd_args=$1 # -t nat -I ? -m ? -j ?
 	local cmd_args_back=$2
 	local i=0
-	$IPT6 $cmd_args > /dev/null 2>&1
-	while [ $? -ne 0 ] && [ $i -le 5 ]; do
+	local rc=0
+	$IPT6 $cmd_args > /dev/null 2>&1 || rc=$?
+	while [ $rc -ne 0 ] && [ $i -le 5 ]; do
 		((i++))
 		sleep 1
-		$IPT6 $cmd_args > /dev/null 2>&1
+		rc=0
+		$IPT6 $cmd_args > /dev/null 2>&1 || rc=$?
 	done
-	if [ $? -ne 0 ]; then
+	if [ $rc -ne 0 ]; then
 		$IPT6 $cmd_args
 		echo "Bugged v6 $cmd_args"
-		if [ ! -z "$cmd_args_back" ]; then
+		if [ -n "$cmd_args_back" ]; then
 			$IPT6 $cmd_args_back || echo "Bugged backup v6 $cmd_args"
 		fi
 	fi
 	return 0
 }
 
+## @fn insert_rules_with_test_ok
+## @usage insert_rules_with_test_ok "<cmd_args>" ["<fallback_args>"]
+## @desc Insère une règle IPv4 et IPv6 avec réessai automatique et fallback.
 insert_rules_with_test_ok()
 {
 	local cmd_args=$1 # -t nat -I ? -m ? -j ?
@@ -107,54 +215,61 @@ insert_rules_with_test_ok()
 	return 0
 }
 
-# Fonction pour vérifier si une chaîne de texte est un reseau IPv4 valide
+## @fn is_ipv4_net
+## @usage is_ipv4_net "<cidr>"
+## @desc Vérifie si la chaîne passée est un sous-réseau CIDR IPv4 valide (ex: 172.18.0.0/16).
 is_ipv4_net()
 {
 	local input="$1"
-	# Utilisation d'une expression régulière pour la validation
 	if [[ $input =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]+$ ]]; then
-		return 0 # C'est une reseau IPv4 valide
+		return 0
 	else
-		return 1 # Ce n'est pas une reseau IPv4 valide
+		return 1
 	fi
 }
 
-# Fonction pour vérifier si une chaîne de texte est un adresse IPv4 valide
+## @fn is_ipv4
+## @usage is_ipv4 "<ip>"
+## @desc Vérifie si la chaîne passée est une adresse IPv4 valide.
 is_ipv4()
 {
 	local input="$1"
-	# Utilisation d'une expression régulière pour la validation
 	if [[ $input =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-		return 0 # C'est une adresse IPv4 valide
+		return 0
 	else
-		return 1 # Ce n'est pas une adresse IPv4 valide
+		return 1
 	fi
 }
 
-# Fonction pour vérifier si une chaîne de texte est un reseau IPv6 valide
+## @fn is_ipv6_net
+## @usage is_ipv6_net "<cidr6>"
+## @desc Vérifie si la chaîne passée est un sous-réseau CIDR IPv6 valide.
 is_ipv6_net()
 {
 	local input="$1"
-	# Utilisation d'une expression régulière pour la validation
-	if [[ $input =~ ^[a-f0-9]{1,4}:[a-f0-9:]*:[a-f0-9]{0,4}/[0-9]{1,3}$ ]]; then
-		return 0 # C'est une reseau IPv6 valide
+	if [[ $input =~ ^[a-fA-F0-9]{1,4}:[a-fA-F0-9:]*:[a-fA-F0-9]{0,4}/[0-9]{1,3}$ ]]; then
+		return 0
 	else
-		return 1 # Ce n'est pas une reseau IPv6 valide
+		return 1
 	fi
 }
 
-# Fonction pour vérifier si une chaîne de texte est un adresse IPv6 valide
+## @fn is_ipv6
+## @usage is_ipv6 "<ip6>"
+## @desc Vérifie si la chaîne passée est une adresse IPv6 valide.
 is_ipv6()
 {
 	local input="$1"
-	# Utilisation d'une expression régulière pour la validation
-	if [[ $input =~ ^[a-f0-9:]{1,4}:[a-f0-9:]*:[a-f0-9]{0,4}$ ]]; then
-		return 0 # C'est une adresse IPv6 valide
+	if [[ $input =~ ^[a-fA-F0-9:]{1,4}:[a-fA-F0-9:]*:[a-fA-F0-9]{0,4}$ ]]; then
+		return 0
 	else
-		return 1 # Ce n'est pas une adresse IPv6 valide
+		return 1
 	fi
 }
 
+## @fn close_traffic_list
+## @usage close_traffic_list "<args_src>" "<args_dst>" "${ips[@]}"
+## @desc Ferme les connexions actives via ss (-k) pour une liste d'adresses IP.
 close_traffic_list()
 {
 	declare -a pids=()
@@ -171,41 +286,126 @@ close_traffic_list()
 	return 0
 }
 
+## @fn get_bridge_name_docker_network
+## @usage get_bridge_name_docker_network "<network_name>"
+## @desc Retourne le nom de l'interface bridge Linux associée à un réseau Docker (avec mise en cache).
 get_bridge_name_docker_network()
 {
 	local NETWORK="$1"
-	local network_options=$(${DOCKER} network inspect -f '{{json .Options}}' "${NETWORK}")
-	# Vérifier si "com.docker.network.bridge.name" est spécifié dans les options
+	if [[ -v "_FW_CACHE_BRIDGE_NAME[$NETWORK]" ]]; then
+		echo "${_FW_CACHE_BRIDGE_NAME[$NETWORK]}"
+		return 0
+	fi
+	local network_options
+	network_options=$(${DOCKER} network inspect -f '{{json .Options}}' "${NETWORK}" 2>/dev/null) || {
+		_FW_CACHE_BRIDGE_NAME["$NETWORK"]=""
+		echo ""
+		return 0
+	}
+	local bridge_name=""
 	if [[ "$network_options" == *"com.docker.network.bridge.name"* ]]; then
-		# Utiliser le nom de bridge spécifié dans les options
-		local bridge_name=$(echo "$network_options" | ${JQ} -r '.["com.docker.network.bridge.name"]')
+		bridge_name=$(echo "$network_options" | ${JQ} -r '.["com.docker.network.bridge.name"]')
 	else
-		# Utiliser l'ID du réseau pour construire le nom du bridge
-		local network_id=$(${DOCKER} network inspect -f '{{.Id}}' "${NETWORK}")
-		local bridge_name="br-${network_id:0:12}"
+		local network_id
+		network_id=$(${DOCKER} network inspect -f '{{.Id}}' "${NETWORK}" 2>/dev/null)
+		bridge_name="br-${network_id:0:12}"
 	fi
 
-	# Vérifier si le bridge existe réellement
-	if ${IFCONFIG} | grep -q "$bridge_name"; then
+	if [ -n "$bridge_name" ] && [ -d "/sys/class/net/${bridge_name}" ]; then
+		_FW_CACHE_BRIDGE_NAME["$NETWORK"]="${bridge_name}"
+		echo "${bridge_name}"
+	elif [ -n "$bridge_name" ] && ${IFCONFIG} 2>/dev/null | grep -q "$bridge_name"; then
+		_FW_CACHE_BRIDGE_NAME["$NETWORK"]="${bridge_name}"
 		echo "${bridge_name}"
 	else
+		_FW_CACHE_BRIDGE_NAME["$NETWORK"]=""
 		echo ""
 	fi
 }
 
-max_length_chain=29  # Longueur maximale autorisée
+## @fn get_docker_network_subnets
+## @usage get_docker_network_subnets "<network_name>"
+## @desc Retourne les sous-réseaux CIDR (IPv4/IPv6) configurés sur un réseau Docker (avec mise en cache).
+get_docker_network_subnets()
+{
+	local NETWORK="$1"
+	if [[ -v "_FW_CACHE_NET_SUBNETS[$NETWORK]" ]]; then
+		echo "${_FW_CACHE_NET_SUBNETS[$NETWORK]}"
+		return 0
+	fi
+	local json_NETWORK
+	json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "${NETWORK}" 2>/dev/null) || {
+		_FW_CACHE_NET_SUBNETS["$NETWORK"]=""
+		return 0
+	}
+	local subnets
+	subnets=$(echo "${json_NETWORK}" | ${JQ} -r '.[]? | .Subnet // empty' 2>/dev/null)
+	_FW_CACHE_NET_SUBNETS["$NETWORK"]="${subnets}"
+	echo "${subnets}"
+}
+
+## @fn get_container_ipv4_on_network
+## @usage get_container_ipv4_on_network "<container_name>" "<network_name>"
+## @desc Récupère l'adresse IPv4 d'un conteneur sur un réseau Docker donné (avec mise en cache).
+get_container_ipv4_on_network()
+{
+	local container_name="$1"
+	local network="$2"
+	local key="${container_name}@${network}"
+	if [[ -v "_FW_CACHE_CONTAINER_IPV4[$key]" ]]; then
+		echo "${_FW_CACHE_CONTAINER_IPV4[$key]}"
+		return 0
+	fi
+	local ipv4
+	ipv4=$(${DOCKER} container inspect -f "{{ index .NetworkSettings.Networks \"${network}\" \"IPAddress\" }}" "${container_name}" 2>/dev/null || true)
+	if ! is_ipv4 "$ipv4"; then
+		ipv4=""
+	fi
+	_FW_CACHE_CONTAINER_IPV4["$key"]="${ipv4}"
+	echo "${ipv4}"
+}
+
+## @fn get_container_ipv6_on_network
+## @usage get_container_ipv6_on_network "<container_name>" "<network_name>"
+## @desc Récupère l'adresse IPv6 globale d'un conteneur sur un réseau Docker donné (avec mise en cache).
+get_container_ipv6_on_network()
+{
+	local container_name="$1"
+	local network="$2"
+	local key="${container_name}@${network}"
+	if [[ -v "_FW_CACHE_CONTAINER_IPV6[$key]" ]]; then
+		echo "${_FW_CACHE_CONTAINER_IPV6[$key]}"
+		return 0
+	fi
+	local ipv6
+	ipv6=$(${DOCKER} container inspect -f "{{ index .NetworkSettings.Networks \"${network}\" \"GlobalIPv6Address\" }}" "${container_name}" 2>/dev/null || true)
+	if ! is_ipv6 "$ipv6"; then
+		ipv6=""
+	fi
+	_FW_CACHE_CONTAINER_IPV6["$key"]="${ipv6}"
+	echo "${ipv6}"
+}
+
+max_length_chain=29  # Longueur maximale autorisée par netfilter
+## @fn generate_chain_name
+## @usage generate_chain_name "<base_name>"
+## @desc Génère un nom de chaîne iptables/ip6tables tronqué à 28 caractères max avec suffixe MD5 déterministe de 6 caractères.
 generate_chain_name()
 {
 	local base_name="$1"  # Le nom de base de la chaîne
 	if ((max_length_chain > ${#base_name})); then
 		echo "${base_name}"
 	else
-		local hashname=$(echo -n "${base_name}" | md5sum | cut -d ' ' -f 1)
-		echo "${base_name:0:$((max_length_chain - ${#base_name} -7))}${hashname:0:6}"
+		local hashname
+		hashname=$(echo -n "${base_name}" | md5sum | cut -d ' ' -f 1)
+		local prefix_len=$((max_length_chain - 7))
+		echo "${base_name:0:${prefix_len}}${hashname:0:6}"
 	fi
 }
 
-# insert_rules_list_ports "-t " "-AI" "-m ipv4" "-m ipv6" "-j" "tcp/udp" ARRAY
+## @fn insert_rules_list_ports
+## @usage insert_rules_list_ports "<option_t>" "<option_A_I>" "<option_m_v4>" "<option_m_v6>" "<option_j>" "<proto>" "${ports[@]}"
+## @desc Insère en parallèle une liste de ports TCP/UDP en IPv4 et IPv6.
 insert_rules_list_ports()
 {
 	local cmd_args_v4=""
@@ -220,12 +420,12 @@ insert_rules_list_ports()
 	cmd_args_v6+=" $option_A_I"
 	local option_m_v4=$1 #-m set ! --match-set ${IPSLISTBADIP} src
 	shift
-	if [ ! -z "$option_m_v4" ]; then
+	if [ -n "$option_m_v4" ]; then
 		cmd_args_v4+=" $option_m_v4"
 	fi
 	local option_m_v6=$1 #-m set ! --match-set ${IPSLISTBADIP}6 src
 	shift
-	if [ ! -z "$cmd_args_v6" ]; then
+	if [ -n "$option_m_v6" ]; then
 		cmd_args_v6+=" $option_m_v6"
 	fi
 	local option_j=$1 #-j ACCEPT
@@ -244,39 +444,45 @@ insert_rules_list_ports()
 	return 0
 }
 
+## @fn open_port_for_network
+## @usage open_port_for_network "inter;net/mask;net6/mask;proto;port"
+## @desc Ouvre un port TCP/UDP sur la chaîne dédiée à une interface et ses sous-réseaux IPv4/IPv6.
 open_port_for_network()
 {
 	local INTER=$1 # inter;net/mask;net6/mask;proto;port
 	declare -a pids=()
 	local INTERC
-	IFS=';' read -r -a INTERC <<< $INTER
+	IFS=';' read -r -a INTERC <<< "$INTER"
 	
-	if [ ! -z "${INTERC[1]}" ]; then
-		local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]}-${INTERC[3]}")
+	if [ -n "${INTERC[1]}" ]; then
+		local chaintouse
+		chaintouse=$(generate_chain_name "${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]}-${INTERC[3]}")
 
-		$IPT -C ${chaintouse} -p ${INTERC[3]} --dport ${INTERC[4]} -j ACCEPT 2> /dev/null || \
-			$IPT -I ${chaintouse} 1 -p ${INTERC[3]} --dport ${INTERC[4]} -j ACCEPT & pids+=($!)
-	
+		$IPT -C "${chaintouse}" -p "${INTERC[3]}" --dport "${INTERC[4]}" -j ACCEPT 2> /dev/null || \
+			$IPT -I "${chaintouse}" 1 -p "${INTERC[3]}" --dport "${INTERC[4]}" -j ACCEPT & pids+=($!)
 	fi
-	if [ ! -z "${INTERC[2]}" ]; then
-		local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]}-${INTERC[3]}")
+	if [ -n "${INTERC[2]}" ]; then
+		local chaintouse
+		chaintouse=$(generate_chain_name "${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]}-${INTERC[3]}")
 
-		$IPT6 -C ${chaintouse} -p ${INTERC[3]} --dport ${INTERC[4]} -j ACCEPT 2> /dev/null || \
-			$IPT6 -I ${chaintouse} 1 -p ${INTERC[3]} --dport ${INTERC[4]} -j ACCEPT & pids+=($!)
-	
+		$IPT6 -C "${chaintouse}" -p "${INTERC[3]}" --dport "${INTERC[4]}" -j ACCEPT 2> /dev/null || \
+			$IPT6 -I "${chaintouse}" 1 -p "${INTERC[3]}" --dport "${INTERC[4]}" -j ACCEPT & pids+=($!)
 	fi
 	wait "${pids[@]}"
 	return 0
 }
 
-## insert_rules_list_docker_ports_to_host "container_name" "network" "-t " "-Aor-I" "I position" "-m ipv4" "-m ipv6" "-j" "tcp/udp" ARRAY
+## @fn insert_rules_list_docker_ports_to_host
+## @usage insert_rules_list_docker_ports_to_host "<container>" "<network>" "<option_t>" "<option_A_I>" "<pos>" "<m_v4>" "<m_v6>" "<option_j>" "<proto>" "${ports[@]}"
+## @desc Autorise un conteneur Docker sur un réseau donné à joindre une liste de ports sur l'hôte (IPv4 & IPv6).
 insert_rules_list_docker_ports_to_host()
 {
 	local container_name=$1
 	shift
 	local network=$1
 	shift
-	local network_interface=$(get_bridge_name_docker_network "${network}")
+	local network_interface
+	network_interface=$(get_bridge_name_docker_network "${network}")
 	if [ -n "${network_interface}" ]; then
 		local option_t=$1 #-t nat/
 		shift
@@ -294,33 +500,87 @@ insert_rules_list_docker_ports_to_host()
 		shift
 		local ports=("$@")
 
+		local ipv4
+		ipv4=$(get_container_ipv4_on_network "${container_name}" "${network}")
+		local ipv6
+		ipv6=$(get_container_ipv6_on_network "${container_name}" "${network}")
+
 		declare -a pids=()
 		local PORT
-		local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "${network}")
-		# Parcours de la liste des sous-réseaux dans la sortie JSON
-		for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
-			if is_ipv4_net "$subnet"; then
-				local ipv4=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.IPAddress }}" ${container_name})
-				local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${network_interface}-${subnet}")
+		local subnet
+		for subnet in $(get_docker_network_subnets "${network}"); do
+			if is_ipv4_net "$subnet" && [ -n "$ipv4" ]; then
+				local chaintouse
+				chaintouse=$(generate_chain_name "${CHAINMAININTER}-${network_interface}-${subnet}")
 				for PORT in "${ports[@]}"; do
 					$IPT ${option_t} -C ${chaintouse} ${option_m_v4} -s ${ipv4} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
 					|| $IPT ${option_t} ${option_A_I} ${chaintouse} ${position_I} ${option_m_v4} -s ${ipv4} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
 				done
-			elif is_ipv6_net "$subnet"; then
-				local ipv6=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.GlobalIPv6Address }}" ${container_name})
-				local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${network_interface}-${subnet}")
+			elif is_ipv6_net "$subnet" && [ -n "$ipv6" ]; then
+				local chaintouse
+				chaintouse=$(generate_chain_name "${CHAINMAININTER}-${network_interface}-${subnet}")
 				for PORT in "${ports[@]}"; do
-					$IPT6 ${option_t} -C  ${chaintouse} ${option_m_v6} -s ${ipv6} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
+					$IPT6 ${option_t} -C ${chaintouse} ${option_m_v6} -s ${ipv6} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
 					|| $IPT6 ${option_t} ${option_A_I} ${chaintouse} ${position_I} ${option_m_v6} -s ${ipv6} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
 				done
 			fi
 		done
+		wait "${pids[@]}"
 	fi
-	wait "${pids[@]}"
 	return 0
 }
 
-## insert_rules_list_docker_ports_to_another_container "container_name_source" "container_name_cible" "network" "-Aor-I" "I position" "-m ipv4" "-m ipv6" "-j" "tcp/udp" ARRAY
+## @fn allow_container_to_host_ports
+## @usage allow_container_to_host_ports "<container>" "<network>" "<proto>" <port1> [port2 ...]
+## @desc Helper simplifié pour firewall.rules.special : autorise un conteneur Docker à accéder à un ou plusieurs ports de l'hôte en vérifiant qu'il n'est pas blacklisté.
+allow_container_to_host_ports()
+{
+	local container_name="$1"
+	local network="$2"
+	local proto="$3"
+	shift 3
+	local ports=("$@")
+	insert_rules_list_docker_ports_to_host "${container_name}" "${network}" "" "-I" "1" \
+		"-m set ! --match-set ${IPSLISTBADIP} src" \
+		"-m set ! --match-set ${IPSLISTBADIP}6 src" \
+		"-j ACCEPT" "${proto}" "${ports[@]}"
+}
+
+## @fn insert_container_special_rule_ipv4
+## @usage insert_container_special_rule_ipv4 "<container>" "<network>" "<rule_template_with_%IP%>"
+## @desc Helper générique IPv4 pour firewall.rules.special : résout l'IPv4 du conteneur sur le réseau et exécute la règle iptables si le conteneur est actif.
+insert_container_special_rule_ipv4()
+{
+	local container_name="$1"
+	local network="$2"
+	local rule_template="$3"
+	local ipv4
+	ipv4=$(get_container_ipv4_on_network "${container_name}" "${network}")
+	if [ -n "${ipv4}" ]; then
+		local rendered="${rule_template//%IP%/${ipv4}}"
+		$IPT ${rendered}
+	fi
+}
+
+## @fn insert_container_special_rule_ipv6
+## @usage insert_container_special_rule_ipv6 "<container>" "<network>" "<rule_template_with_%IP%>"
+## @desc Helper générique IPv6 pour firewall.rules.special : résout l'IPv6 du conteneur sur le réseau et exécute la règle ip6tables si le conteneur est actif.
+insert_container_special_rule_ipv6()
+{
+	local container_name="$1"
+	local network="$2"
+	local rule_template="$3"
+	local ipv6
+	ipv6=$(get_container_ipv6_on_network "${container_name}" "${network}")
+	if [ -n "${ipv6}" ]; then
+		local rendered="${rule_template//%IP%/${ipv6}}"
+		$IPT6 ${rendered}
+	fi
+}
+
+## @fn insert_rules_list_docker_ports_to_another_container
+## @usage insert_rules_list_docker_ports_to_another_container "<src_container>" "<dst_container>" "<network>" "<option_A_I>" "<pos>" "<m_v4>" "<m_v6>" "<option_j>" "<proto>" "${ports[@]}"
+## @desc Autorise les flux inter-conteneurs (aller + retour ESTABLISHED,RELATED) sur un même bridge Docker en évitant les doublons (-C sans numéro de ligne).
 insert_rules_list_docker_ports_to_another_container()
 {
 	local container_name_source=$1
@@ -329,30 +589,28 @@ insert_rules_list_docker_ports_to_another_container()
 	shift
 	local network=$1
 	shift
-	local network_interface=$(get_bridge_name_docker_network "${network}")
+	local network_interface
+	network_interface=$(get_bridge_name_docker_network "${network}")
 	if [ -n "${network_interface}" ]; then
-		#local cmd_args=""
-		#cmd_args+="$option_t"
 		local option_A_I=$1 #-A ?/-I ?
 		shift
-		#cmd_args+=" $option_A_I"
-		local cmd_args_v4_end=""
-		local cmd_args_v6_end=""
 		local position_I=$1 #1/2/3/?/....
 		shift
-		if [ ! -z "${position_I}" ]; then
-			cmd_args_v4_end+=" ${position_I}"
-			cmd_args_v6_end+=" ${position_I}"
+		local pos_arg=""
+		if [ -n "${position_I}" ]; then
+			pos_arg=" ${position_I}"
 		fi
 		local option_m_v4=$1 #-m set ! --match-set ${IPSLISTBADIP} src
 		shift
-		if [ ! -z "$option_m_v4" ]; then
-			cmd_args_v4_end+=" $option_m_v4"
+		local m_v4_arg=""
+		if [ -n "$option_m_v4" ]; then
+			m_v4_arg=" $option_m_v4"
 		fi
 		local option_m_v6=$1 #-m set ! --match-set ${IPSLISTBADIP}6 src
 		shift
-		if [ ! -z "$cmd_args_v6" ]; then
-			cmd_args_v6_end+=" $option_m_v6"
+		local m_v6_arg=""
+		if [ -n "$option_m_v6" ]; then
+			m_v6_arg=" $option_m_v6"
 		fi
 		local option_j=$1 #-j ACCEPT
 		shift
@@ -360,56 +618,68 @@ insert_rules_list_docker_ports_to_another_container()
 		shift
 		local ports=("$@")
 
+		local ipv4_source
+		ipv4_source=$(get_container_ipv4_on_network "${container_name_source}" "${network}")
+		local ipv4_cible
+		ipv4_cible=$(get_container_ipv4_on_network "${container_name_cible}" "${network}")
+		local ipv6_source
+		ipv6_source=$(get_container_ipv6_on_network "${container_name_source}" "${network}")
+		local ipv6_cible
+		ipv6_cible=$(get_container_ipv6_on_network "${container_name_cible}" "${network}")
+
+		local chain_fwd="${CHAINFORWARDTRAFIC}-from-${network_interface}"
 		declare -a pids=()
 		local PORT
-		local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "${network}")
-		# Parcours de la liste des sous-réseaux dans la sortie JSON
-		for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
-			if is_ipv4_net "$subnet"; then
-				local ipv4_source=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.IPAddress }}" ${container_name_source})
-				local ipv4_cible=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.IPAddress }}" ${container_name_cible})
+		local subnet
+		for subnet in $(get_docker_network_subnets "${network}"); do
+			if is_ipv4_net "$subnet" && [ -n "$ipv4_source" ] && [ -n "$ipv4_cible" ]; then
 				for PORT in "${ports[@]}"; do
-					$IPT -C ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -o ${network_interface} -s ${ipv4_source} -d ${ipv4_cible} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
-					|| $IPT ${option_A_I} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -o ${network_interface} -s ${ipv4_source} -d ${ipv4_cible} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
+					$IPT -C ${chain_fwd}${m_v4_arg} -o ${network_interface} -s ${ipv4_source} -d ${ipv4_cible} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT ${option_A_I} ${chain_fwd}${pos_arg}${m_v4_arg} -o ${network_interface} -s ${ipv4_source} -d ${ipv4_cible} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
 					
-					$IPT -C ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv4_cible} -d ${ipv4_source} -p ${proto} --sport ${PORT} ${option_j} 2> /dev/null \
-					|| $IPT ${option_A_I} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv4_cible} -d ${ipv4_source} -p ${proto} --sport ${PORT} ${option_j} & pids+=($!)
+					$IPT -C ${chain_fwd}${m_v4_arg} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv4_cible} -d ${ipv4_source} -p ${proto} --sport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT ${option_A_I} ${chain_fwd}${pos_arg}${m_v4_arg} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv4_cible} -d ${ipv4_source} -p ${proto} --sport ${PORT} ${option_j} & pids+=($!)
 				done
-			elif is_ipv6_net "$subnet"; then
-				local ipv6_source=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.GlobalIPv6Address }}" ${container_name_source})
-				local ipv6_cible=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.GlobalIPv6Address }}" ${container_name_cible})
+			elif is_ipv6_net "$subnet" && [ -n "$ipv6_source" ] && [ -n "$ipv6_cible" ]; then
 				for PORT in "${ports[@]}"; do
-					$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -o ${network_interface} -s ${ipv6_source} -d ${ipv6_cible} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
-					|| $IPT6 ${option_A_I} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -o ${network_interface} -s ${ipv6_source} -d ${ipv6_cible} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
+					$IPT6 -C ${chain_fwd}${m_v6_arg} -o ${network_interface} -s ${ipv6_source} -d ${ipv6_cible} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT6 ${option_A_I} ${chain_fwd}${pos_arg}${m_v6_arg} -o ${network_interface} -s ${ipv6_source} -d ${ipv6_cible} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
 					
-					$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv6_cible} -d ${ipv6_source} -p ${proto} --sport ${PORT} ${option_j} 2> /dev/null \
-					|| $IPT6 ${option_A_I} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv6_cible} -d ${ipv6_source} -p ${proto} --sport ${PORT} ${option_j} & pids+=($!)
+					$IPT6 -C ${chain_fwd}${m_v6_arg} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv6_cible} -d ${ipv6_source} -p ${proto} --sport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT6 ${option_A_I} ${chain_fwd}${pos_arg}${m_v6_arg} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv6_cible} -d ${ipv6_source} -p ${proto} --sport ${PORT} ${option_j} & pids+=($!)
 				done
 			fi
 		done
+		wait "${pids[@]}"
 	fi
-	wait "${pids[@]}"
 	return 0
 }
 
+## @fn insert_crowdsec_list_rules
+## @usage insert_crowdsec_list_rules "<command_begin>" "<command_end>"
+## @desc Parcourt les ipsets CrowdSec IPv4 actifs et insère une règle iptables pour chacun.
 insert_crowdsec_list_rules()
 {
 	local command_begin=$1
 	shift
 	local command_end=$1
 	local list
-	for list in $(ipset list -name | grep "${crowdsecSetIPBeginName}"); do
+	for list in $($IPS list -name 2>/dev/null | grep "${crowdsecSetIPBeginName}"); do
 		$IPT ${command_begin} -m set --match-set ${list} ${command_end}
 	done
 	return 0
 }
+
+## @fn insert_crowdsec6_list_rules
+## @usage insert_crowdsec6_list_rules "<command_begin>" "<command_end>"
+## @desc Parcourt les ipsets CrowdSec IPv6 actifs et insère une règle ip6tables pour chacun.
 insert_crowdsec6_list_rules()
 {
 	local command_begin=$1
 	shift
 	local command_end=$1
 	local list
-	for list in $(ipset list -name | grep "${crowdsecSetIP6BeginName}"); do
+	for list in $($IPS list -name 2>/dev/null | grep "${crowdsecSetIP6BeginName}"); do
 		$IPT6 ${command_begin} -m set --match-set ${list} ${command_end}
 	done
 	return 0

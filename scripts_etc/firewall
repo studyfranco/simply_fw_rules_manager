@@ -11,8 +11,8 @@
 # Description:       Start/stop firewall, a script to set/unset your custom fir
 ### END INIT INFO
 
-source /etc/firewall/firewall.settings
 source /etc/firewall/firewall.tools
+source /etc/firewall/firewall.settings
 
 declare -a SPECIALCHAINLIST=($CHAINIPALLOW
 				$CHAINMAINOUTINTERCR $CHAINOPENCRPORTTCP $CHAINOPENCRPORTUDP
@@ -169,7 +169,7 @@ set_rules()
 	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 9050 -g $CHAINDROPLOGWITHOUTSELECTOR" &
 	# On améliore la sécurité
 	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 445 -g $CHAINDROPLOGWITHOUTSELECTOR" &
-	insert_rules "-A $CHAINFORWARDFILTERTCP -p udp --dport 445 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 445 -g $CHAINDROPLOGWITHOUTSELECTOR" &
 	# On bloque le possible traffic vers des serveurs DNS over https
 	$IPT -A $CHAINFORWARDFILTERTCP -m set --match-set ${IPSDOH} dst -g $CHAINDROPLOGWITHOUTSELECTOR &
 	$IPT6 -A $CHAINFORWARDFILTERTCP -m set --match-set ${IPSDOH}6 dst -g $CHAINDROPLOGWITHOUTSELECTOR &
@@ -1715,7 +1715,7 @@ insert_rules_begin_interfaces()
 		$IPT6 -t nat -C ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[2]} src -g ${chaintouse} 2> /dev/null || \
 			$IPT6 -t nat -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[2]} src -g ${chaintouse} & pids+=($!)
 		
-		$IPT -t nat -C ${chaintouse} -m set --match-set ${IPSLISTBADIP}6 src -j RETURN 2> /dev/null || \
+		$IPT6 -t nat -C ${chaintouse} -m set --match-set ${IPSLISTBADIP}6 src -j RETURN 2> /dev/null || \
 			insert_rules_with_test_ok_ipv6 "-t nat -A ${chaintouse} -m set --match-set ${IPSLISTBADIP}6 src -j RETURN" "" && \
 			$IPT6 -t nat -A ${chaintouse} -p tcp -g ${chaintouse_tcp} && \
 			$IPT6 -t nat -A ${chaintouse} -p udp -g ${chaintouse_udp}  & pids+=($!)
