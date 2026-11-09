@@ -248,9 +248,9 @@ function clearSessionCredentials() {
 }
 
 function describeTier(profile) {
-  if (profile.is_master) return { label: "Master", title: "Full administrative key" };
-  if (profile.can_manage_keys) return { label: "Parent", title: "Can delegate sub-keys" };
-  return { label: "Sub-Key", title: "Scoped operational key" };
+  if (profile.is_master) return { tier: "master", label: "MASTER", title: "The Master key: full access, unique, and pinned at startup." };
+  if (profile.can_manage_keys) return { tier: "parent", label: "PARENT", title: "A Parent key: may create Daughter keys, but cannot grant global scopes (R4)." };
+  return { tier: "daughter", label: "DAUGHTER", title: "A Daughter key: no key management." };
 }
 
 async function attemptSignIn(apiKey, signingSecret) {
@@ -266,7 +266,7 @@ async function attemptSignIn(apiKey, signingSecret) {
   if (badge) {
     badge.textContent = tier.label;
     badge.title = tier.title;
-    badge.className = `badge badge-tier ${tier.tier === 'master' ? 'badge-master' : 'badge-daughter'}`;
+    badge.className = `badge badge-tier badge-tier-${tier.tier}`;
   }
 
   document.getElementById("keys-tab-btn")?.classList.toggle("hidden", !(me.is_master || me.can_manage_keys));
@@ -1516,7 +1516,7 @@ function renderKeyRow(k, canManage) {
   return `<tr>
     <td><strong>${escapeHtml(k.name)}</strong></td>
     <td class="font-mono text-muted text-sm">${escapeHtml(k.prefix)}…</td>
-    <td><span class="badge badge-tier ${tier.tier === 'master' ? 'badge-master' : 'badge-daughter'}">${escapeHtml(tier.label)}</span></td>
+    <td><span class="badge badge-tier badge-tier-${tier.tier}">${escapeHtml(tier.label)}</span></td>
     <td>${keyScopes(k)}</td>
     <td class="font-mono text-sm">${escapeHtml(k.bound_ips || "any")}</td>
     <td>
@@ -1561,7 +1561,7 @@ function showKeyForm(existing) {
         </div>
       </div>
       ${me.is_master && !isMasterTarget ? `
-        <div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:0.75rem;">
+        <div class="permissions-grid mt-2 mb-4">
           <label class="checkbox-container"><input type="checkbox" id="kf-manage-keys" ${existing?.can_manage_keys ? "checked" : ""}> <span>can_manage_keys</span></label>
           <label class="checkbox-container"><input type="checkbox" id="kf-manage-settings" ${existing?.can_manage_settings ? "checked" : ""}> <span>can_manage_settings</span></label>
           <label class="checkbox-container"><input type="checkbox" id="kf-manage-special" ${existing?.can_manage_special_rules ? "checked" : ""}> <span>can_manage_special_rules</span></label>
