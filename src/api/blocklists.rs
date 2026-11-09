@@ -7,7 +7,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
-use ipnetwork::IpNetwork;
+use ipnet::IpNet;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -301,16 +301,16 @@ pub struct BlocklistTestResponse {
     pub message: String,
 }
 
-fn parse_ip_or_cidr_token(line: &str) -> Option<IpNetwork> {
+fn parse_ip_or_cidr_token(line: &str) -> Option<IpNet> {
     // Strip trailing comments (`; ...` or `# ...`) used by Spamhaus DROP/EDROP and similar feeds
     let before_comment = line.split([';', '#']).next().map_or("", str::trim);
     if before_comment.is_empty() {
         return None;
     }
     before_comment
-        .parse::<IpNetwork>()
+        .parse::<IpNet>()
         .ok()
-        .or_else(|| before_comment.parse::<IpAddr>().ok().map(IpNetwork::from))
+        .or_else(|| before_comment.parse::<IpAddr>().ok().map(IpNet::from))
 }
 
 /// `POST /api/firewall/blocklists/{id}/test` — Fetch the blocklist URL and verify that it returns
@@ -356,8 +356,8 @@ pub async fn test_blocklist(
         }
         if let Some(net) = parse_ip_or_cidr_token(trimmed) {
             match net {
-                IpNetwork::V4(_) => valid_ipv4_count += 1,
-                IpNetwork::V6(_) => valid_ipv6_count += 1,
+                IpNet::V4(_) => valid_ipv4_count += 1,
+                IpNet::V6(_) => valid_ipv6_count += 1,
             }
             if sample_entries.len() < 5 {
                 sample_entries.push(net.to_string());

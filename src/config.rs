@@ -4,7 +4,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use axum::http::HeaderMap;
-use ipnetwork::IpNetwork;
+use ipnet::IpNet;
 
 /// Default maximum request body size in bytes (10 MiB).
 pub const DEFAULT_MAX_BODY_MIB: usize = 10;
@@ -39,7 +39,7 @@ pub fn normalize_ip(ip: IpAddr) -> IpAddr {
 /// Trusted reverse proxy networks permitted to supply `X-Forwarded-For` / `X-Real-IP`.
 #[derive(Clone, Debug, Default)]
 pub struct TrustedProxies {
-    networks: Arc<Vec<IpNetwork>>,
+    networks: Arc<Vec<IpNet>>,
 }
 
 impl TrustedProxies {
@@ -55,10 +55,10 @@ impl TrustedProxies {
     pub fn parse_list(raw: &str) -> Self {
         let mut networks = Vec::new();
         for token in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-            if let Ok(net) = token.parse::<IpNetwork>() {
+            if let Ok(net) = token.parse::<IpNet>() {
                 networks.push(net);
             } else if let Ok(ip) = token.parse::<IpAddr>() {
-                networks.push(IpNetwork::from(normalize_ip(ip)));
+                networks.push(IpNet::from(normalize_ip(ip)));
             }
         }
         Self {
@@ -68,7 +68,7 @@ impl TrustedProxies {
 
     /// Returns the list of trusted networks.
     #[must_use]
-    pub fn networks(&self) -> &[IpNetwork] {
+    pub fn networks(&self) -> &[IpNet] {
         &self.networks
     }
 }
@@ -76,9 +76,9 @@ impl TrustedProxies {
 /// Resolves the effective client IP from socket peer address and forwarding headers when the
 /// peer is in `trusted`.
 #[must_use]
-pub fn resolve_client_ip(peer_ip: IpAddr, headers: &HeaderMap, trusted: &[IpNetwork]) -> IpAddr {
+pub fn resolve_client_ip(peer_ip: IpAddr, headers: &HeaderMap, trusted: &[IpNet]) -> IpAddr {
     let peer = normalize_ip(peer_ip);
-    if !trusted.iter().any(|net| net.contains(peer)) {
+    if !trusted.iter().any(|net| net.contains(&peer)) {
         return peer;
     }
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
@@ -88,7 +88,7 @@ pub fn resolve_client_ip(peer_ip: IpAddr, headers: &HeaderMap, trusted: &[IpNetw
             .map(normalize_ip)
             .collect();
         for hop in hops.into_iter().rev() {
-            if !trusted.iter().any(|net| net.contains(hop)) {
+            if !trusted.iter().any(|net| net.contains(&hop)) {
                 return hop;
             }
         }

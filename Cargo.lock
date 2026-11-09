@@ -1711,12 +1711,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
-name = "ipnetwork"
-version = "0.21.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf370abdafd54d13e54a620e8c3e1145f28e46cc9d704bc6d94414559df41763"
-
-[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3294,10 +3288,9 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "dotenvy",
- "futures",
  "hex",
  "hmac",
- "ipnetwork",
+ "ipnet",
  "log",
  "oxc_allocator",
  "oxc_parser",

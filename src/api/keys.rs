@@ -7,7 +7,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
-use ipnetwork::IpNetwork;
+use ipnet::IpNet;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, Set,
 };
@@ -115,7 +115,7 @@ fn validate_bound_ips(raw: Option<&str>) -> Result<Option<String>, AppError> {
     };
     let mut normalized = Vec::new();
     for entry in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        if let Ok(net) = entry.parse::<IpNetwork>() {
+        if let Ok(net) = entry.parse::<IpNet>() {
             normalized.push(net.to_string());
         } else if let Ok(ip) = entry.parse::<IpAddr>() {
             normalized.push(crate::config::normalize_ip(ip).to_string());

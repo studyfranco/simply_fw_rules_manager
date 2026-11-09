@@ -7,7 +7,7 @@ use axum::extract::{ConnectInfo, OriginalUri, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 use chrono::Utc;
-use ipnetwork::IpNetwork;
+use ipnet::IpNet;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use sha2::{Digest, Sha256};
 
@@ -156,19 +156,19 @@ pub async fn auth_middleware(
     }
 
     let bound_ips_raw = key_record.bound_ips.as_deref().unwrap_or("");
-    let networks: Vec<IpNetwork> = bound_ips_raw
+    let networks: Vec<IpNet> = bound_ips_raw
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| {
-            s.parse::<IpNetwork>().or_else(|_| {
+            s.parse::<IpNet>().or_else(|_| {
                 s.parse::<IpAddr>()
-                    .map(|ip| IpNetwork::from(crate::config::normalize_ip(ip)))
+                    .map(|ip| IpNet::from(crate::config::normalize_ip(ip)))
             })
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| AppError::Internal)?;
-    if !networks.is_empty() && !networks.iter().any(|net| net.contains(client_ip)) {
+    if !networks.is_empty() && !networks.iter().any(|net| net.contains(&client_ip)) {
         return Err(AppError::Forbidden("Client IP not allowed".to_owned()));
     }
 
