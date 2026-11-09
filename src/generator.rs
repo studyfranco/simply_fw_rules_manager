@@ -357,3 +357,60 @@ pub fn write_bundle_to_disk(bundle: &GeneratedFilesBundle) -> Result<Vec<String>
     }
     Ok(written)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_bash_array_formats_empty_and_populated() {
+        assert_eq!(format_bash_array("empty_arr", &[]), "declare -a empty_arr=()");
+        let items = vec!["eth0".to_owned(), "eth1".to_owned()];
+        assert_eq!(
+            format_bash_array("ifaces", &items),
+            "declare -a ifaces=(\"eth0\" \"eth1\")"
+        );
+    }
+
+    #[test]
+    fn format_bash_assoc_bool_formats_empty_and_populated() {
+        assert_eq!(
+            format_bash_assoc_bool("empty_map", &BTreeMap::new()),
+            "declare -A empty_map=()"
+        );
+
+        let mut map = BTreeMap::new();
+        map.insert("eth0".to_owned(), true);
+        map.insert("eth1".to_owned(), false);
+        assert_eq!(
+            format_bash_assoc_bool("dhcp", &map),
+            "declare -A dhcp=( [\"eth0\"]=1 [\"eth1\"]=0 )"
+        );
+    }
+
+    #[test]
+    fn write_bundle_to_disk_creates_executable_files_atomically() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bundle = GeneratedFilesBundle {
+            output_dir: temp_dir.path().display().to_string(),
+            firewall_settings: "# settings content\n".to_owned(),
+            firewall_rules_special: "# special content\n".to_owned(),
+            firewall_get_list: "# get list content\n".to_owned(),
+            docker_filter_active: false,
+            active_docker_inter_rules: 0,
+            skipped_docker_inter_rules: 0,
+            active_zone_rules: 0,
+            skipped_zone_rules: 0,
+            active_blocklists: 0,
+        };
+
+        let written = write_bundle_to_disk(&bundle).expect("write bundle");
+        assert_eq!(written.len(), 3);
+        assert!(temp_dir.path().join("firewall.settings").exists());
+        assert!(temp_dir.path().join("firewall.rules.special").exists());
+        assert!(temp_dir.path().join("firewall.get.list").exists());
+
+        let read_back = std::fs::read_to_string(temp_dir.path().join("firewall.settings")).unwrap();
+        assert_eq!(read_back, "# settings content\n");
+    }
+}

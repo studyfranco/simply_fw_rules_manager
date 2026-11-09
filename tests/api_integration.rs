@@ -426,3 +426,77 @@ async fn blocklist_live_test_and_atomic_generate_and_hook_reload_work() {
     assert!(actions.contains(&"TEST_BLOCKLIST"));
     assert!(actions.contains(&"GENERATE_AND_RELOAD"));
 }
+
+#[tokio::test]
+async fn key_bound_ips_enforcement_and_daughter_key_rbac() {
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
+    let (app, _state) = setup_test_env().await;
+
+    // 1. Master creates daughter key with bound_ips and blocklist management scope only
+    let create_payload = json!({
+        "name": "Operator Key",
+        "can_manage_keys": false,
+        "can_manage_settings": false,
+        "can_manage_special_rules": false,
+        "can_manage_blocklists": true,
+        "can_deploy_and_reload": false,
+        "bound_ips": "192.168.1.0/24, 10.0.0.1"
+    });
+    let req = signed_request(
+        "POST",
+        "/api/keys",
+        TEST_MASTER_KEY,
+        TEST_MASTER_SECRET,
+        Some(&create_payload),
+    );
+    let (st, body) = response_json(app.clone().oneshot(req).await.unwrap()).await;
+    assert_eq!(st, StatusCode::CREATED);
+    let op_key = body["raw_key"].as_str().unwrap().to_owned();
+    let op_secret = body["signing_secret"].as_str().unwrap().to_owned();
+
+    // 2. Request from permitted IP subnet (192.168.1.50) -> should succeed
+    let mut req_allowed = signed_request(
+        "GET",
+        "/api/firewall/blocklists?probe=allowed",
+        &op_key,
+        &op_secret,
+        None,
+    );
+    let allowed_addr: SocketAddr = "192.168.1.50:54321".parse().unwrap();
+    req_allowed.extensions_mut().insert(ConnectInfo(allowed_addr));
+    let (st_allowed, _) = response_json(app.clone().oneshot(req_allowed).await.unwrap()).await;
+    assert_eq!(st_allowed, StatusCode::OK);
+
+    // 3. Request from forbidden IP (172.16.0.1) -> should return 403 Forbidden
+    let mut req_forbidden = signed_request(
+        "GET",
+        "/api/firewall/blocklists?probe=forbidden",
+        &op_key,
+        &op_secret,
+        None,
+    );
+    let forbidden_addr: SocketAddr = "172.16.0.1:54321".parse().unwrap();
+    req_forbidden.extensions_mut().insert(ConnectInfo(forbidden_addr));
+    let (st_forbidden, err_body) = response_json(app.clone().oneshot(req_forbidden).await.unwrap()).await;
+    assert_eq!(st_forbidden, StatusCode::FORBIDDEN);
+    assert_eq!(err_body["error"], "Client IP not allowed");
+
+    // 4. Operator tries to create another key without can_manage_keys -> 403 Forbidden
+    let forbidden_create = json!({
+        "name": "Sub key",
+        "can_manage_keys": false
+    });
+    let mut req_rbac = signed_request(
+        "POST",
+        "/api/keys",
+        &op_key,
+        &op_secret,
+        Some(&forbidden_create),
+    );
+    req_rbac.extensions_mut().insert(ConnectInfo(allowed_addr));
+    let (st_rbac, err_rbac) = response_json(app.clone().oneshot(req_rbac).await.unwrap()).await;
+    assert_eq!(st_rbac, StatusCode::FORBIDDEN);
+    assert!(err_rbac["error"].as_str().unwrap().contains("Missing can_manage_keys"));
+}

@@ -345,14 +345,6 @@ pub fn parse_firewall_settings(content: &str) -> ParsedFirewallSettings {
                 ("localDnatPortUDP=(", "local", "DnatPortUDP"),
                 ("localDockerTCP=(", "local", "DockerTCP"),
                 ("localDockerUDP=(", "local", "DockerUDP"),
-                ("openPortTCP=(", "open", "OpenPortsTCP"),
-                ("openPortUDP=(", "open", "OpenPortsUDP"),
-                ("redirectPortTCP=(", "open", "RedirectPortTCP"),
-                ("redirectPortUDP=(", "open", "RedirectPortUDP"),
-                ("dnatPortTCP=(", "open", "DnatPortTCP"),
-                ("dnatPortUDP=(", "open", "DnatPortUDP"),
-                ("openDockerTCP=(", "open", "DockerTCP"),
-                ("openDockerUDP=(", "open", "DockerUDP"),
                 ("WWopenPortTCP=(", "ww", "OpenPortsTCP"),
                 ("WWopenPortUDP=(", "ww", "OpenPortsUDP"),
                 ("WWredirectPortTCP=(", "ww", "RedirectPortTCP"),
@@ -361,6 +353,14 @@ pub fn parse_firewall_settings(content: &str) -> ParsedFirewallSettings {
                 ("WWdnatPortUDP=(", "ww", "DnatPortUDP"),
                 ("WWDockerTCP=(", "ww", "DockerTCP"),
                 ("WWDockerUDP=(", "ww", "DockerUDP"),
+                ("openPortTCP=(", "open", "OpenPortsTCP"),
+                ("openPortUDP=(", "open", "OpenPortsUDP"),
+                ("redirectPortTCP=(", "open", "RedirectPortTCP"),
+                ("redirectPortUDP=(", "open", "RedirectPortUDP"),
+                ("dnatPortTCP=(", "open", "DnatPortTCP"),
+                ("dnatPortUDP=(", "open", "DnatPortUDP"),
+                ("openDockerTCP=(", "open", "DockerTCP"),
+                ("openDockerUDP=(", "open", "DockerUDP"),
             ];
             for (prefix, zone, kind) in zone_mappings {
                 if code_part.contains(prefix) {
@@ -424,4 +424,79 @@ pub fn parse_get_list_feeds(raw: &str) -> Vec<(String, String, bool)> {
         }
     }
     feeds
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_quoted_items_extracts_all_double_quoted_strings() {
+        let input = r#"INTEROut=("eth0" "eth1" "wg0")"#;
+        assert_eq!(extract_quoted_items(input), vec!["eth0", "eth1", "wg0"]);
+
+        let empty = r#"INTEROut=()"#;
+        assert!(extract_quoted_items(empty).is_empty());
+    }
+
+    #[test]
+    fn parse_get_list_feeds_parses_active_and_commented_feeds() {
+        let sample = r#"
+# Header comments
+generate_list "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt" "emerging_threats"
+# generate_list "https://feodotracker.abuse.ch/downloads/ipblocklist.txt" "feodo_tracker"
+# other text that is not a generate_list line
+"#;
+        let feeds = parse_get_list_feeds(sample);
+        assert_eq!(feeds.len(), 2);
+        assert_eq!(feeds[0], ("emerging_threats".to_owned(), "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt".to_owned(), true));
+        assert_eq!(feeds[1], ("feodo_tracker".to_owned(), "https://feodotracker.abuse.ch/downloads/ipblocklist.txt".to_owned(), false));
+    }
+
+    #[test]
+    fn refactor_special_rules_script_replaces_docker_inspect_with_tools_helpers() {
+        let raw = r#"
+TRAEFIK_IP=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.ext.IPAddress }}" traefik)
+PLEX_IP=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.ext.IPAddress }}" plexmediaserver)
+PLEX_V6=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.ext.GlobalIPv6Address }}" plexmediaserver)
+PIHOLE_IP=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.pihole.IPAddress }}" pihole)
+"#;
+        let refactored = refactor_special_rules_script(raw);
+        assert!(refactored.contains(r#"$(get_container_ipv4_on_network "traefik" "ext")"#));
+        assert!(refactored.contains(r#"$(get_container_ipv4_on_network "plexmediaserver" "ext")"#));
+        assert!(refactored.contains(r#"$(get_container_ipv6_on_network "plexmediaserver" "ext")"#));
+        assert!(refactored.contains(r#"$(get_container_ipv4_on_network "pihole" "pihole")"#));
+        assert!(!refactored.contains("container inspect"));
+    }
+
+    #[test]
+    fn parse_firewall_settings_extracts_interfaces_arrays_and_dhcp_map() {
+        let content = r#"
+mainInter="wan0"
+INTEROut=("wan0" "wan1")
+interfaceWithDHCP=( ["wan0"]=1 ["lan0"]=0 )
+blockedCountry="CN,RU"
+"#;
+        let parsed = parse_firewall_settings(content);
+        assert_eq!(parsed.main_inter, "wan0");
+        assert_eq!(parsed.inter_out, vec!["wan0", "wan1"]);
+        assert_eq!(parsed.interface_with_dhcp.get("wan0"), Some(&true));
+        assert_eq!(parsed.interface_with_dhcp.get("lan0"), Some(&false));
+        assert_eq!(parsed.blocked_country, "CN,RU");
+    }
+
+    #[test]
+    fn parse_firewall_settings_extracts_zone_rules_correctly() {
+        let content = r#"
+openPortTCP=("80" "443" "8080")
+WWopenPortUDP=("53" "123")
+"#;
+        let parsed = parse_firewall_settings(content);
+        assert_eq!(parsed.zone_rules.len(), 5);
+        assert!(parsed.zone_rules.contains(&("open".to_owned(), "OpenPortsTCP".to_owned(), "80".to_owned())));
+        assert!(parsed.zone_rules.contains(&("open".to_owned(), "OpenPortsTCP".to_owned(), "443".to_owned())));
+        assert!(parsed.zone_rules.contains(&("open".to_owned(), "OpenPortsTCP".to_owned(), "8080".to_owned())));
+        assert!(parsed.zone_rules.contains(&("ww".to_owned(), "OpenPortsUDP".to_owned(), "53".to_owned())));
+        assert!(parsed.zone_rules.contains(&("ww".to_owned(), "OpenPortsUDP".to_owned(), "123".to_owned())));
+    }
 }
