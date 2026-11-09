@@ -997,3 +997,50 @@ textarea.input-field {
     color: #f87171;
     border-color: rgba(239, 68, 68, 0.3);
 }
+
+/* Filters & Audit Presentation */
+.filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.filters .input-field {
+    width: auto;
+    flex: 1 1 150px;
+    min-width: 0;
+}
+
+.table-scroll {
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+.pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+}
+
+.pagination #audit-page-indicator {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 500;
+    min-width: 60px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.pagination .btn-icon,
+.btn-icon {
+    min-width: 2.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem 0.65rem;
+}

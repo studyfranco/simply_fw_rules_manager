@@ -22,7 +22,7 @@ pub struct SystemSettingsResponse {
     pub encryption_enabled: bool,
     /// Destination directory for generated firewall files.
     pub output_dir: String,
-    /// URL of simply_hook_executor, if configured.
+    /// URL of `simply_hook_executor`, if configured.
     pub hook_executor_url: Option<String>,
     /// Total zone rules configured.
     pub zone_rules_count: u64,
@@ -39,6 +39,10 @@ pub struct SystemSettingsResponse {
 }
 
 /// Handles `GET /api/system/settings`. Master-only.
+///
+/// # Errors
+///
+/// Returns `AppError::Forbidden` if caller is not master, or `AppError::Database` on DB query failure.
 pub async fn get_system_settings(
     State(state): State<AppState>,
     Extension(caller): Extension<api_key::Model>,

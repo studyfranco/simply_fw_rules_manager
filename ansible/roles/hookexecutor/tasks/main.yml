@@ -82,6 +82,15 @@
     group: "{{ hookexecutor_group }}"
     mode: "0600"
 
+- name: Ensure firewall script symlink exists (/etc/firewall/firewall -> /etc/init.d/firewall)
+  ansible.builtin.file:
+    src: /etc/init.d/firewall
+    dest: "{{ firewall_dir }}/firewall"
+    state: link
+    force: false
+  when: ansible_os_family == 'Debian' or ansible_os_family == 'RedHat'
+  ignore_errors: true
+
 - name: Configure restricted sudoers permissions (/etc/sudoers.d/hookexecutor)
   ansible.builtin.copy:
     dest: /etc/sudoers.d/hookexecutor
@@ -96,3 +105,5 @@
       {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall.launch.block.ip
       {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall reload
       {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall reload-rules
+      {{ hookexecutor_user }} ALL=(root) NOPASSWD: /etc/init.d/firewall reload
+      {{ hookexecutor_user }} ALL=(root) NOPASSWD: /etc/init.d/firewall reload-rules

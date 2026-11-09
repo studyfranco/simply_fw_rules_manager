@@ -59,16 +59,9 @@
           <h1>Simply FW Rules Manager</h1>
         </div>
         <div id="header-actions" class="header-actions">
-          <button id="btn-generate-files" type="button" class="btn btn-secondary btn-sm" title="Atomically write firewall.settings, firewall.rules.special and firewall.get.list to disk">Generate Files</button>
-          <button id="btn-reload-fw" type="button" class="btn btn-secondary btn-sm" title="Trigger simply_hook_executor to reload the firewall">Reload Firewall</button>
-          <button id="btn-generate-and-reload" type="button" class="btn btn-primary btn-sm" title="Generate all 3 files and immediately reload the firewall via simply_hook_executor">Generate &amp; Apply</button>
-          <span id="identity-name" class="text-muted text-sm"></span>
           <span id="current-key-tier" class="badge badge-tier" title="Your key's RBAC tier"></span>
-          <span id="identity-badge" class="badge badge-tier hidden"></span>
           <button id="refresh-btn" type="button" class="btn btn-secondary btn-sm">Refresh</button>
-          <button id="btn-refresh" type="button" class="hidden"></button>
           <button id="logout-btn" type="button" class="btn btn-logout btn-sm" title="Also clears the saved session from this browser">Logout</button>
-          <button id="btn-logout" type="button" class="hidden"></button>
         </div>
       </header>
 
@@ -91,11 +84,84 @@
       <main id="tab-blocklists" class="tab-panel"></main>
       <main id="tab-deploy" class="tab-panel"></main>
       <main id="tab-keys" class="tab-panel"></main>
-      <main id="tab-system-settings" class="tab-panel"></main>
-      <main id="tab-audit-logs" class="tab-panel"></main>
+      <main id="tab-system-settings" class="tab-panel">
+        <section class="card admin-section">
+          <div class="list-header">
+            <h2>System Configuration</h2>
+          </div>
+          <p class="subtitle mb-4">Effective runtime settings and daemon counters. Visible to Master keys only.</p>
+          <div class="kv-grid" id="system-settings-grid">
+            <div class="text-muted text-sm">Loading system configuration...</div>
+          </div>
+        </section>
+      </main>
+      <main id="tab-audit-logs" class="tab-panel">
+        <section class="card audit-section">
+          <div class="list-header">
+            <h2>Audit Logs</h2>
+          </div>
+          <p class="subtitle mb-4">Recent mutating firewall actions across the system. Master keys only.</p>
+          <div class="filters mb-4">
+            <input type="text" id="audit-action-filter" class="input-field font-mono" list="audit-action-options" placeholder="Filter by action...">
+            <input type="text" id="audit-ip-filter" class="input-field font-mono" placeholder="Filter by client IP...">
+            <input type="text" id="audit-key-filter" class="input-field" placeholder="Filter by API key (name or prefix)...">
+            <input type="datetime-local" id="audit-since-filter" class="input-field" title="Since (inclusive)">
+            <input type="datetime-local" id="audit-until-filter" class="input-field" title="Until (exclusive)">
+            <button type="button" id="audit-search-btn" class="btn btn-icon" title="Search (or press Enter in a filter field)">🔍</button>
+            <button type="button" id="audit-clear-btn" class="btn btn-secondary btn-sm">Clear</button>
+          </div>
+          <div class="table-container table-scroll">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>API Key</th>
+                  <th>Client IP</th>
+                  <th>Action</th>
+                  <th>Target</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="audit-logs-table-body">
+                <tr><td colspan="6" class="text-center text-muted">Loading data...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination">
+            <button id="audit-btn-prev" class="btn btn-icon" disabled>&laquo; Prev</button>
+            <span id="audit-page-indicator">Page 1</span>
+            <button id="audit-btn-next" class="btn btn-icon" disabled>Next &raquo;</button>
+          </div>
+        </section>
+      </main>
     </div>
 
   </div>
+
+  <datalist id="audit-action-options">
+    <option value="KEY_CREATE"></option>
+    <option value="KEY_UPDATE"></option>
+    <option value="KEY_DELETE"></option>
+    <option value="KEY_ROTATE"></option>
+    <option value="KEY_SECRET_ROTATE"></option>
+    <option value="SETTINGS_UPDATE"></option>
+    <option value="ZONE_RULE_CREATE"></option>
+    <option value="ZONE_RULE_UPDATE"></option>
+    <option value="ZONE_RULE_DELETE"></option>
+    <option value="DOCKER_RULE_CREATE"></option>
+    <option value="DOCKER_RULE_UPDATE"></option>
+    <option value="DOCKER_RULE_DELETE"></option>
+    <option value="SPECIAL_RULE_CREATE"></option>
+    <option value="SPECIAL_RULE_UPDATE"></option>
+    <option value="SPECIAL_RULE_DELETE"></option>
+    <option value="BLOCKLIST_CREATE"></option>
+    <option value="BLOCKLIST_UPDATE"></option>
+    <option value="BLOCKLIST_DELETE"></option>
+    <option value="BLOCKLIST_REFETCH"></option>
+    <option value="FIREWALL_GENERATE"></option>
+    <option value="FIREWALL_RELOAD"></option>
+    <option value="FIREWALL_GENERATE_AND_RELOAD"></option>
+  </datalist>
 
   <script src="app.js"></script>
 </body>

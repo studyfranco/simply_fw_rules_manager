@@ -262,9 +262,8 @@ async function attemptSignIn(apiKey, signingSecret) {
   me = await client.get("/api/auth/me");
   saveSessionCredentials(apiKey, signingSecret);
 
-  document.getElementById("identity-name").textContent = `${me.name} (${me.prefix}…)`;
   const tier = describeTier(me);
-  const badge = document.getElementById("current-key-tier") || document.getElementById("identity-badge");
+  const badge = document.getElementById("current-key-tier");
   if (badge) {
     badge.textContent = tier.label;
     badge.title = tier.title;
@@ -303,51 +302,10 @@ const onLogout = () => {
   document.getElementById("dashboard-container").classList.add("hidden");
   document.getElementById("login-screen").classList.remove("hidden");
 };
-document.getElementById("btn-logout")?.addEventListener("click", onLogout);
 document.getElementById("logout-btn")?.addEventListener("click", onLogout);
 
 const onRefresh = () => loadTab(activeTab);
-document.getElementById("btn-refresh")?.addEventListener("click", onRefresh);
 document.getElementById("refresh-btn")?.addEventListener("click", onRefresh);
-
-/* ---------------------------------------------------------------------- *
- * Global Top Bar Actions (Generate / Reload / Generate & Apply)
- * ---------------------------------------------------------------------- */
-
-document.getElementById("btn-generate-files").addEventListener("click", async () => {
-  try {
-    const res = await client.post("/api/firewall/generate");
-    toast(
-      `Fichiers générés dans ${res.bundle.output_dir} (${res.bundle.active_docker_inter_rules} flux Docker actifs, ${res.bundle.skipped_docker_inter_rules} inactifs ignorés)`,
-      "success"
-    );
-    if (activeTab === "deploy") await renderDeployTab();
-  } catch (err) {
-    toast("Erreur génération: " + err.message, "error");
-  }
-});
-
-document.getElementById("btn-reload-fw").addEventListener("click", async () => {
-  try {
-    const res = await client.post("/api/firewall/reload");
-    toast(`Firewall rechargé via simply_hook_executor (${res.hook_name}, HTTP ${res.status_code})`, "success");
-  } catch (err) {
-    toast("Erreur reload firewall: " + err.message, "error");
-  }
-});
-
-document.getElementById("btn-generate-and-reload").addEventListener("click", async () => {
-  try {
-    const res = await client.post("/api/firewall/generate-and-reload");
-    toast(
-      `Généré (${res.files_written.length} fichiers) & appliqué via '${res.hook_result.hook_name}' (HTTP ${res.hook_result.status_code})`,
-      "success"
-    );
-    if (activeTab === "deploy") await renderDeployTab();
-  } catch (err) {
-    toast("Erreur Générer & Appliquer: " + err.message, "error");
-  }
-});
 
 /* ---------------------------------------------------------------------- *
  * Tab Navigation
@@ -1265,6 +1223,20 @@ async function renderDeployTab() {
   const canDeploy = me.is_master || me.can_deploy_and_reload;
 
   panel.innerHTML = `
+    <section class="card" style="margin-bottom:1.5rem;">
+      <div class="list-header">
+        <h2>Actions de Déploiement &amp; Reload Firewall</h2>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          ${canDeploy ? `
+            <button id="btn-generate-files" type="button" class="btn btn-secondary btn-sm" title="Atomically write firewall.settings, firewall.rules.special and firewall.get.list to disk">Generate Files</button>
+            <button id="btn-reload-fw" type="button" class="btn btn-secondary btn-sm" title="Trigger simply_hook_executor to reload the firewall">Reload Firewall</button>
+            <button id="btn-generate-and-reload" type="button" class="btn btn-primary btn-sm" title="Generate all 3 files and immediately reload the firewall via simply_hook_executor">Generate &amp; Apply</button>
+          ` : '<span class="text-muted text-sm">Privilèges insuffisants pour déployer ou recharger</span>'}
+        </div>
+      </div>
+      <p class="subtitle">Générez les fichiers de configuration du pare-feu sur le disque ou déclenchez leur application à chaud via <code>simply_hook_executor</code>.</p>
+    </section>
+
     <section class="card">
       <div class="list-header">
         <h2>Configuration Déploiement, Démon Docker &amp; <code>simply_hook_executor</code></h2>
@@ -1362,6 +1334,50 @@ async function renderDeployTab() {
   }
 
   if (canDeploy) {
+    const genBtn = document.getElementById("btn-generate-files");
+    if (genBtn) {
+      genBtn.addEventListener("click", async () => {
+        try {
+          const res = await client.post("/api/firewall/generate");
+          toast(
+            `Fichiers générés dans ${res.bundle.output_dir} (${res.bundle.active_docker_inter_rules} flux Docker actifs, ${res.bundle.skipped_docker_inter_rules} inactifs ignorés)`,
+            "success"
+          );
+          if (activeTab === "deploy") await renderDeployTab();
+        } catch (err) {
+          toast("Erreur génération: " + err.message, "error");
+        }
+      });
+    }
+
+    const relBtn = document.getElementById("btn-reload-fw");
+    if (relBtn) {
+      relBtn.addEventListener("click", async () => {
+        try {
+          const res = await client.post("/api/firewall/reload");
+          toast(`Firewall rechargé via simply_hook_executor (${res.hook_name}, HTTP ${res.status_code})`, "success");
+        } catch (err) {
+          toast("Erreur reload firewall: " + err.message, "error");
+        }
+      });
+    }
+
+    const genAndRelBtn = document.getElementById("btn-generate-and-reload");
+    if (genAndRelBtn) {
+      genAndRelBtn.addEventListener("click", async () => {
+        try {
+          const res = await client.post("/api/firewall/generate-and-reload");
+          toast(
+            `Généré (${res.files_written.length} fichiers) & appliqué via '${res.hook_result.hook_name}' (HTTP ${res.hook_result.status_code})`,
+            "success"
+          );
+          if (activeTab === "deploy") await renderDeployTab();
+        } catch (err) {
+          toast("Erreur Générer & Appliquer: " + err.message, "error");
+        }
+      });
+    }
+
     const impBtn = document.getElementById("btn-deploy-import");
     if (impBtn) {
       impBtn.addEventListener("click", async () => {
@@ -1482,14 +1498,18 @@ async function renderKeysTab() {
 }
 
 function keyScopes(k) {
-  if (k.is_master) return '<span class="badge badge-tier badge-master">master</span>';
-  const chips = [];
-  if (k.can_manage_keys) chips.push('<span class="badge badge-scope">keys</span>');
-  if (k.can_manage_settings) chips.push('<span class="badge badge-scope">settings/zones/docker</span>');
-  if (k.can_manage_special_rules) chips.push('<span class="badge badge-scope">special-rules</span>');
-  if (k.can_manage_blocklists) chips.push('<span class="badge badge-scope">blocklists</span>');
-  if (k.can_deploy_and_reload) chips.push('<span class="badge badge-scope">deploy/reload</span>');
-  return chips.length ? chips.join(" ") : '<span class="text-muted text-sm">read-only</span>';
+  if (k.is_master) return '<span class="badge badge-scope badge-scope-master">Master</span>';
+  const scopes = [
+    k.can_manage_keys && "can_manage_keys",
+    k.can_manage_settings && "can_manage_settings",
+    k.can_manage_special_rules && "can_manage_special_rules",
+    k.can_manage_blocklists && "can_manage_blocklists",
+    k.can_deploy_and_reload && "can_deploy_and_reload",
+  ]
+    .filter(Boolean)
+    .map((s) => `<span class="badge badge-scope">${escapeHtml(s)}</span>`)
+    .join(" ");
+  return scopes || '<span class="text-muted text-sm">none</span>';
 }
 
 function renderKeyRow(k, canManage) {
@@ -1527,7 +1547,7 @@ function showIssuedSecretBanner(title, apiKey, signingSecret) {
 
 function showKeyForm(existing) {
   const slot = document.getElementById("key-form-slot");
-  const isMasterTarget = existing && existing.is_master;
+  const isMasterTarget = Boolean(existing?.is_master);
   slot.innerHTML = `
     <form id="key-editor-form" class="card" style="margin-bottom:1rem;background:var(--bg-input);">
       <h3>${existing ? `Edit Key: ${escapeHtml(existing.name)}` : "Create New Sub-Key"}</h3>
@@ -1541,14 +1561,16 @@ function showKeyForm(existing) {
           <input type="text" id="kf-bound-ips" class="input-field font-mono" value="${escapeHtml(existing?.bound_ips || "")}" placeholder="10.0.0.0/8, 192.168.1.10">
         </div>
       </div>
-      ${!isMasterTarget ? `
+      ${me.is_master && !isMasterTarget ? `
         <div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:0.75rem;">
-          <label><input type="checkbox" id="kf-manage-keys" ${existing?.can_manage_keys ? "checked" : ""}> <code>can_manage_keys</code></label>
-          <label><input type="checkbox" id="kf-manage-settings" ${existing?.can_manage_settings ? "checked" : ""}> <code>can_manage_settings</code></label>
-          <label><input type="checkbox" id="kf-manage-special" ${existing?.can_manage_special_rules ? "checked" : ""}> <code>can_manage_special_rules</code></label>
-          <label><input type="checkbox" id="kf-manage-blocklists" ${existing?.can_manage_blocklists ? "checked" : ""}> <code>can_manage_blocklists</code></label>
-          <label><input type="checkbox" id="kf-deploy" ${existing?.can_deploy_and_reload ? "checked" : ""}> <code>can_deploy_and_reload</code></label>
+          <label class="checkbox-container"><input type="checkbox" id="kf-manage-keys" ${existing?.can_manage_keys ? "checked" : ""}> <span>can_manage_keys</span></label>
+          <label class="checkbox-container"><input type="checkbox" id="kf-manage-settings" ${existing?.can_manage_settings ? "checked" : ""}> <span>can_manage_settings</span></label>
+          <label class="checkbox-container"><input type="checkbox" id="kf-manage-special" ${existing?.can_manage_special_rules ? "checked" : ""}> <span>can_manage_special_rules</span></label>
+          <label class="checkbox-container"><input type="checkbox" id="kf-manage-blocklists" ${existing?.can_manage_blocklists ? "checked" : ""}> <span>can_manage_blocklists</span></label>
+          <label class="checkbox-container"><input type="checkbox" id="kf-deploy" ${existing?.can_deploy_and_reload ? "checked" : ""}> <span>can_deploy_and_reload</span></label>
         </div>
+      ` : !isMasterTarget ? `
+        <p class="text-muted text-sm" style="margin-top:0.5rem;">Only the Master key may grant global scopes (R4). Keys you create are Daughter keys holding no management scopes.</p>
       ` : `<p class="text-muted text-sm" style="margin-top:0.5rem;">Master key permissions are immutable; only <code>bound_ips</code> may be updated.</p>`}
       <div style="display:flex;gap:0.5rem;margin-top:0.75rem;">
         <button type="submit" class="btn btn-primary">${existing ? "Save Changes" : "Create Key"}</button>
@@ -1570,25 +1592,32 @@ function showKeyForm(existing) {
         };
         if (!isMasterTarget) {
           payload.name = document.getElementById("kf-name").value.trim();
-          payload.can_manage_keys = document.getElementById("kf-manage-keys").checked;
-          payload.can_manage_settings = document.getElementById("kf-manage-settings").checked;
-          payload.can_manage_special_rules = document.getElementById("kf-manage-special").checked;
-          payload.can_manage_blocklists = document.getElementById("kf-manage-blocklists").checked;
-          payload.can_deploy_and_reload = document.getElementById("kf-deploy").checked;
+          if (me.is_master) {
+            payload.can_manage_keys = document.getElementById("kf-manage-keys")?.checked || false;
+            payload.can_manage_settings = document.getElementById("kf-manage-settings")?.checked || false;
+            payload.can_manage_special_rules = document.getElementById("kf-manage-special")?.checked || false;
+            payload.can_manage_blocklists = document.getElementById("kf-manage-blocklists")?.checked || false;
+            payload.can_deploy_and_reload = document.getElementById("kf-deploy")?.checked || false;
+          }
         }
         await client.put(`/api/keys/${existing.id}`, payload);
         toast("API key updated", "success");
+        slot.innerHTML = "";
         await renderKeysTab();
       } else {
-        const res = await client.post("/api/keys", {
+        const payload = {
           name: document.getElementById("kf-name").value.trim(),
           bound_ips: document.getElementById("kf-bound-ips").value.trim() || null,
-          can_manage_keys: document.getElementById("kf-manage-keys").checked,
-          can_manage_settings: document.getElementById("kf-manage-settings").checked,
-          can_manage_special_rules: document.getElementById("kf-manage-special").checked,
-          can_manage_blocklists: document.getElementById("kf-manage-blocklists").checked,
-          can_deploy_and_reload: document.getElementById("kf-deploy").checked,
-        });
+          ...(me.is_master ? {
+            can_manage_keys: document.getElementById("kf-manage-keys")?.checked || false,
+            can_manage_settings: document.getElementById("kf-manage-settings")?.checked || false,
+            can_manage_special_rules: document.getElementById("kf-manage-special")?.checked || false,
+            can_manage_blocklists: document.getElementById("kf-manage-blocklists")?.checked || false,
+            can_deploy_and_reload: document.getElementById("kf-deploy")?.checked || false,
+          } : {}),
+        };
+        const res = await client.post("/api/keys", payload);
+        slot.innerHTML = "";
         await renderKeysTab();
         showIssuedSecretBanner(`Created Key '${res.key.name}'`, res.api_key, res.signing_secret);
       }
@@ -1604,11 +1633,14 @@ function showKeyForm(existing) {
 
 async function renderSystemSettingsTab() {
   const panel = document.getElementById("tab-system-settings");
+  if (!panel) return;
   if (!me.is_master) {
     panel.innerHTML = '<section class="card"><p class="empty-state">System settings are visible to the Master key only.</p></section>';
     return;
   }
   const s = await client.get("/api/system/settings");
+  const grid = document.getElementById("system-settings-grid");
+  if (!grid) return;
   const item = (label, value) => `
     <div class="kv-item">
       <span class="kv-key">${escapeHtml(label)}</span>
@@ -1619,30 +1651,20 @@ async function renderSystemSettingsTab() {
     ? `<div class="tag-list">${s.trusted_proxies.map((p) => `<span class="badge badge-scope font-mono">${escapeHtml(p)}</span>`).join(' ')}</div>`
     : '<span class="text-muted">None configured</span>';
 
-  panel.innerHTML = `
-    <section class="card">
-      <div class="list-header">
-        <h2>System Configuration</h2>
-      </div>
-      <p class="subtitle mb-4">Effective runtime settings and daemon counters. Visible to Master keys only.</p>
-      <div class="kv-grid">
-        ${[
-          item("Trusted Proxies", trustedProxiesDisplay),
-          item("Secrets at rest", s.encryption_enabled
-            ? '<span class="badge badge-success">encrypted</span>'
-            : '<span class="badge badge-timeout">unencrypted</span>'),
-          item("Firewall Output Dir", `<span class="font-mono">${escapeHtml(s.output_dir)}</span>`),
-          item("Hook Executor URL", s.hook_executor_url ? `<span class="font-mono">${escapeHtml(s.hook_executor_url)}</span>` : '<span class="text-muted">Not configured</span>'),
-          item("Zone Rules", s.zone_rules_count),
-          item("Docker Inter-Rules", s.docker_rules_count),
-          item("Blocklists", s.blocklists_count),
-          item("Special Rules", s.special_rules_count),
-          item("API Keys", s.api_key_count),
-          item("Audit Logs stored", s.audit_log_count),
-        ].join("")}
-      </div>
-    </section>
-  `;
+  grid.innerHTML = [
+    item("Trusted Proxies", trustedProxiesDisplay),
+    item("Secrets at rest", s.encryption_enabled
+      ? '<span class="badge badge-success">encrypted</span>'
+      : '<span class="badge badge-timeout">unencrypted</span>'),
+    item("Firewall Output Dir", `<span class="font-mono">${escapeHtml(s.output_dir)}</span>`),
+    item("Hook Executor URL", s.hook_executor_url ? `<span class="font-mono">${escapeHtml(s.hook_executor_url)}</span>` : '<span class="text-muted">Not configured</span>'),
+    item("Zone Rules", s.zone_rules_count),
+    item("Docker Inter-Rules", s.docker_rules_count),
+    item("Blocklists", s.blocklists_count),
+    item("Special Rules", s.special_rules_count),
+    item("API Keys", s.api_key_count),
+    item("Audit Logs stored", s.audit_log_count),
+  ].join("");
 }
 
 /* ---------------------------------------------------------------------- *
@@ -1650,13 +1672,91 @@ async function renderSystemSettingsTab() {
  * ---------------------------------------------------------------------- */
 
 let auditFilterState = { action: "", client_ip: "", api_key: "", since: "", until: "", page: 1, limit: 50 };
+let auditControlsConfigured = false;
+let lastAuditLogCount = 0;
+
+function setupAuditControls() {
+  if (auditControlsConfigured) return;
+  const searchBtn = document.getElementById("audit-search-btn");
+  const clearBtn = document.getElementById("audit-clear-btn");
+  const prevBtn = document.getElementById("audit-btn-prev");
+  const nextBtn = document.getElementById("audit-btn-next");
+  const actionFilter = document.getElementById("audit-action-filter");
+  const ipFilter = document.getElementById("audit-ip-filter");
+  const keyFilter = document.getElementById("audit-key-filter");
+  const sinceFilter = document.getElementById("audit-since-filter");
+  const untilFilter = document.getElementById("audit-until-filter");
+
+  if (!searchBtn) return;
+  auditControlsConfigured = true;
+
+  const triggerSearch = async () => {
+    auditFilterState.action = actionFilter ? actionFilter.value.trim() : "";
+    auditFilterState.client_ip = ipFilter ? ipFilter.value.trim() : "";
+    auditFilterState.api_key = keyFilter ? keyFilter.value.trim() : "";
+    auditFilterState.since = sinceFilter ? sinceFilter.value : "";
+    auditFilterState.until = untilFilter ? untilFilter.value : "";
+    auditFilterState.page = 1;
+    await renderAuditLogsTab();
+  };
+
+  searchBtn.addEventListener("click", triggerSearch);
+  if (clearBtn) {
+    clearBtn.addEventListener("click", async () => {
+      if (actionFilter) actionFilter.value = "";
+      if (ipFilter) ipFilter.value = "";
+      if (keyFilter) keyFilter.value = "";
+      if (sinceFilter) sinceFilter.value = "";
+      if (untilFilter) untilFilter.value = "";
+      auditFilterState = { action: "", client_ip: "", api_key: "", since: "", until: "", page: 1, limit: 50 };
+      await renderAuditLogsTab();
+    });
+  }
+  if (sinceFilter) sinceFilter.addEventListener("change", triggerSearch);
+  if (untilFilter) untilFilter.addEventListener("change", triggerSearch);
+  [actionFilter, ipFilter, keyFilter].forEach((el) => {
+    if (el) {
+      el.addEventListener("keydown", async (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          await triggerSearch();
+        }
+      });
+    }
+  });
+
+  if (prevBtn) {
+    prevBtn.addEventListener("click", async () => {
+      if (auditFilterState.page > 1) {
+        auditFilterState.page--;
+        await renderAuditLogsTab();
+      }
+    });
+  }
+  if (nextBtn) {
+    nextBtn.addEventListener("click", async () => {
+      if (lastAuditLogCount >= auditFilterState.limit) {
+        auditFilterState.page++;
+        await renderAuditLogsTab();
+      }
+    });
+  }
+}
 
 async function renderAuditLogsTab() {
   const panel = document.getElementById("tab-audit-logs");
+  if (!panel) return;
   if (!me.is_master) {
     panel.innerHTML = '<section class="card"><p class="empty-state">Audit logs are visible to the Master key only.</p></section>';
     return;
   }
+  setupAuditControls();
+
+  const tbody = document.getElementById("audit-logs-table-body");
+  if (tbody) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">Loading data...</td></tr>';
+  }
+
   const offset = (auditFilterState.page - 1) * auditFilterState.limit;
   const params = new URLSearchParams({
     limit: String(auditFilterState.limit),
@@ -1666,114 +1766,37 @@ async function renderAuditLogsTab() {
   if (auditFilterState.client_ip) params.set("client_ip", auditFilterState.client_ip);
   if (auditFilterState.api_key) params.set("api_key", auditFilterState.api_key);
   if (auditFilterState.since) {
-    const d = new Date(auditFilterState.since);
-    if (!Number.isNaN(d.getTime())) params.set("since", d.toISOString());
+    try {
+      const d = new Date(auditFilterState.since);
+      if (!Number.isNaN(d.getTime())) params.set("since", d.toISOString());
+    } catch {}
   }
   if (auditFilterState.until) {
-    const d = new Date(auditFilterState.until);
-    if (!Number.isNaN(d.getTime())) params.set("until", d.toISOString());
+    try {
+      const d = new Date(auditFilterState.until);
+      if (!Number.isNaN(d.getTime())) params.set("until", d.toISOString());
+    } catch {}
   }
   const qs = params.toString();
-  const logs = await client.get("/api/audit-logs" + (qs ? "?" + qs : ""));
-
-  panel.innerHTML = `
-    <section class="card">
-      <div class="list-header">
-        <h2>Audit Logs</h2>
-      </div>
-      <p class="subtitle mb-4">Recent mutating firewall actions across the system. Master keys only.</p>
-      <div class="filters mb-4" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
-        <input type="text" id="audit-action-filter" class="input-field font-mono" list="audit-action-options" placeholder="Filter by action..." value="${escapeHtml(auditFilterState.action)}">
-        <datalist id="audit-action-options">
-          <option value="KEY_CREATE"></option>
-          <option value="KEY_UPDATE"></option>
-          <option value="KEY_DELETE"></option>
-          <option value="KEY_ROTATE"></option>
-          <option value="KEY_SECRET_ROTATE"></option>
-          <option value="ZONE_RULE_CREATE"></option>
-          <option value="ZONE_RULE_UPDATE"></option>
-          <option value="ZONE_RULE_DELETE"></option>
-          <option value="DOCKER_RULE_CREATE"></option>
-          <option value="DOCKER_RULE_UPDATE"></option>
-          <option value="DOCKER_RULE_DELETE"></option>
-          <option value="SPECIAL_RULE_CREATE"></option>
-          <option value="SPECIAL_RULE_UPDATE"></option>
-          <option value="SPECIAL_RULE_DELETE"></option>
-          <option value="BLOCKLIST_CREATE"></option>
-          <option value="BLOCKLIST_UPDATE"></option>
-          <option value="BLOCKLIST_DELETE"></option>
-          <option value="FILES_GENERATE"></option>
-          <option value="FIREWALL_RELOAD"></option>
-        </datalist>
-        <input type="text" id="audit-ip-filter" class="input-field font-mono" placeholder="Filter by client IP..." value="${escapeHtml(auditFilterState.client_ip)}">
-        <input type="text" id="audit-key-filter" class="input-field" placeholder="Filter by API key..." value="${escapeHtml(auditFilterState.api_key)}">
-        <input type="datetime-local" id="audit-since-filter" class="input-field" title="Since (inclusive)" value="${escapeHtml(auditFilterState.since)}">
-        <input type="datetime-local" id="audit-until-filter" class="input-field" title="Until (exclusive)" value="${escapeHtml(auditFilterState.until)}">
-        <button type="button" id="audit-search-btn" class="btn btn-icon" title="Search">🔍</button>
-        <button type="button" id="audit-clear-btn" class="btn btn-secondary btn-sm">Clear</button>
-      </div>
-      <div class="table-container">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Timestamp</th>
-              <th>API Key</th>
-              <th>Client IP</th>
-              <th>Action</th>
-              <th>Target</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${logs.length ? logs.map(auditRow).join("") : `<tr><td colspan="6" class="empty-state">No audit entries matching filter.</td></tr>`}
-          </tbody>
-        </table>
-      </div>
-      <div class="pagination" style="display:flex;gap:0.75rem;align-items:center;margin-top:1rem;justify-content:flex-end;">
-        <button id="audit-btn-prev" class="btn btn-icon" ${auditFilterState.page <= 1 ? "disabled" : ""}>&laquo; Prev</button>
-        <span id="audit-page-indicator">Page ${auditFilterState.page}</span>
-        <button id="audit-btn-next" class="btn btn-icon" ${logs.length < auditFilterState.limit ? "disabled" : ""}>Next &raquo;</button>
-      </div>
-    </section>
-  `;
-
-  document.getElementById("audit-search-btn").addEventListener("click", async () => {
-    auditFilterState.action = document.getElementById("audit-action-filter").value.trim();
-    auditFilterState.client_ip = document.getElementById("audit-ip-filter").value.trim();
-    auditFilterState.api_key = document.getElementById("audit-key-filter").value.trim();
-    auditFilterState.since = document.getElementById("audit-since-filter").value;
-    auditFilterState.until = document.getElementById("audit-until-filter").value;
-    auditFilterState.page = 1;
-    await renderAuditLogsTab();
-  });
-
-  document.getElementById("audit-clear-btn").addEventListener("click", async () => {
-    auditFilterState = { action: "", client_ip: "", api_key: "", since: "", until: "", page: 1, limit: 50 };
-    await renderAuditLogsTab();
-  });
-
-  ['audit-action-filter', 'audit-ip-filter', 'audit-key-filter'].forEach((id) => {
-    document.getElementById(id)?.addEventListener("keydown", async (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        document.getElementById("audit-search-btn").click();
-      }
-    });
-  });
-
-  document.getElementById("audit-btn-prev").addEventListener("click", async () => {
-    if (auditFilterState.page > 1) {
-      auditFilterState.page--;
-      await renderAuditLogsTab();
+  try {
+    const logs = await client.get("/api/audit-logs" + (qs ? "?" + qs : ""));
+    lastAuditLogCount = logs.length;
+    if (tbody) {
+      tbody.innerHTML = logs.length
+        ? logs.map(auditRow).join("")
+        : '<tr><td colspan="6" class="empty-state">No audit entries matching filter.</td></tr>';
     }
-  });
-
-  document.getElementById("audit-btn-next").addEventListener("click", async () => {
-    if (logs.length >= auditFilterState.limit) {
-      auditFilterState.page++;
-      await renderAuditLogsTab();
+    const prevBtn = document.getElementById("audit-btn-prev");
+    const nextBtn = document.getElementById("audit-btn-next");
+    const pageIndicator = document.getElementById("audit-page-indicator");
+    if (prevBtn) prevBtn.disabled = auditFilterState.page <= 1;
+    if (nextBtn) nextBtn.disabled = logs.length < auditFilterState.limit;
+    if (pageIndicator) pageIndicator.textContent = `Page ${auditFilterState.page}`;
+  } catch (err) {
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">Failed to load audit logs: ${escapeHtml(err.message)}</td></tr>`;
     }
-  });
+  }
 }
 
 function auditRow(a) {
