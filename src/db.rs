@@ -26,7 +26,11 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
             .foreign_keys(true)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
-            .busy_timeout(Duration::from_millis(SQLITE_BUSY_TIMEOUT_MS));
+            .busy_timeout(Duration::from_millis(SQLITE_BUSY_TIMEOUT_MS))
+            .pragma("temp_store", "MEMORY")
+            .pragma("mmap_size", "268435456")
+            .pragma("cache_size", "-64000")
+            .pragma("analysis_limit", "1000");
         let pool = SqlitePoolOptions::new()
             .max_connections(SQLITE_MAX_CONNECTIONS)
             .connect_with(connect_options)
@@ -46,6 +50,10 @@ pub async fn apply_sqlite_pragmas(db: &DatabaseConnection) {
         "PRAGMA foreign_keys = ON",
         "PRAGMA synchronous = NORMAL",
         &format!("PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}"),
+        "PRAGMA temp_store = MEMORY",
+        "PRAGMA cache_size = -64000",
+        "PRAGMA mmap_size = 268435456",
+        "PRAGMA analysis_limit = 1000",
     ];
     for stmt in statements {
         if let Err(e) = db
@@ -58,6 +66,22 @@ pub async fn apply_sqlite_pragmas(db: &DatabaseConnection) {
             tracing::warn!("failed to (re)apply session pragma '{stmt}': {e}");
         }
     }
+}
+
+/// Refreshes `SQLite` query planner statistics (`PRAGMA optimize`).
+///
+/// # Errors
+/// Returns [`DbErr`] if the pragma execution fails.
+pub async fn run_sqlite_optimize(db: &DatabaseConnection) -> Result<(), DbErr> {
+    if db.get_database_backend() != DatabaseBackend::Sqlite {
+        return Ok(());
+    }
+    db.execute_raw(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "PRAGMA analysis_limit = 1000; PRAGMA optimize;".to_owned(),
+    ))
+    .await?;
+    Ok(())
 }
 
 /// Runs all pending database migrations.
