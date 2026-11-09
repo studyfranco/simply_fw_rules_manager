@@ -53,6 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let listen_addr: SocketAddr = std::env::var("LISTEN_ADDR")
+        .or_else(|_| std::env::var("PORT").map(|p| format!("0.0.0.0:{p}")))
         .unwrap_or_else(|_| "0.0.0.0:3000".to_owned())
         .parse()?;
 
