@@ -172,7 +172,6 @@ let activeTab = "settings";
 let cachedDockerDiscovery = null;
 let cachedSettings = null;
 let zoneFilterState = "";
-let auditFilterState = { action: "", client_ip: "", api_key: "" };
 
 function escapeHtml(str) {
   return String(str ?? "")
