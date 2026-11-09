@@ -41,13 +41,13 @@ dotenvy = "0.15"
 log = "0.4"
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "getrandom"] }
 regex = "1"
-futures = "0.3.34"
+futures = "0.3"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tokio = { version = "1", features = ["full", "test-util"] }
 tempfile = "3"
 wiremock = "0.6"
-oxc_allocator = "0.146"
-oxc_parser = "0.146"
-oxc_span = "0.146"
+oxc_allocator = "0.158"
+oxc_parser = "0.158"
+oxc_span = "0.158"
