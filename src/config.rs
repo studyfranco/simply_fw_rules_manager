@@ -30,10 +30,7 @@ pub fn max_body_bytes() -> usize {
 /// Unwraps IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`) to canonical IPv4.
 #[must_use]
 pub fn normalize_ip(ip: IpAddr) -> IpAddr {
-    match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
-        v4 => v4,
-    }
+    ip.to_canonical()
 }
 
 /// Trusted reverse proxy networks permitted to supply `X-Forwarded-For` / `X-Real-IP`.
