@@ -50,6 +50,10 @@ On first startup (or via an explicit import API/UI action), the service parses e
 - **Documentation & Panic-Free Policy:**
   - `src/lib.rs` enforces `#![warn(missing_docs)]` and `[lints.clippy] all = "warn", pedantic = "warn"`.
   - Production code and HTTP handlers MUST NOT use `.unwrap()` or `.expect()`. Propagate all errors cleanly via `Result<T, AppError>`.
+- **Dependency Freshness & Security Auditing Policy:**
+  - All external libraries and Cargo dependencies MUST always be kept at their latest compatible versions (`cargo update`, latest semver).
+  - Both `scripts/test_e2e.sh` and CI workflows (`.github/workflows/ci.yml`, `.github/workflows/docker-publish.yml`) enforce automated dependency updates (`cargo update`) and security vulnerability audits (`cargo audit --ignore RUSTSEC-2026-0459`).
+  - Deployments and PR merges require a clean security audit and zero failing tests as mandatory prerequisites. Outdated or vulnerable dependencies must never be left unaddressed.
 
 ---
 

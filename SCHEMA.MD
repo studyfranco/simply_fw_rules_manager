@@ -123,3 +123,48 @@ Stores the managed `firewall.rules.special` Bash script and its latest 3-stage v
 | `sort_order` | `Integer` | No | Deterministic ordering |
 | `created_at` | `DateTimeUtc` | No | Creation timestamp |
 | `updated_at` | `DateTimeUtc` | No | Update timestamp |
+
+---
+
+## 3. Database Indexing & Query Optimization Strategy
+
+All indexes are managed across SQL-agnostic SeaORM migrations (`m20261109_000002_add_performance_indexes.rs` and `m20261110_000003_add_query_optimization_indexes.rs`) to eliminate sequential scans, avoid temporary table sorts, and maximize query execution performance:
+
+### `api_keys`
+- `idx_api_keys_single_master` / `key_hash` (Unique Index): Instant O(1) hash lookup during HMAC authentication.
+- `idx_api_keys_parent_key_id` (`parent_key_id`): Foreign key traversal and cascade delete optimization.
+- `idx_api_keys_prefix` (`prefix`): Prefix-based operator and audit lookups.
+- `idx_api_keys_is_master` (`is_master`): Boot-time master key discovery and pinning.
+- `idx_api_keys_name` (`name`): Name-based key resolution.
+- `idx_api_keys_created_at` (`created_at ASC`): Fast deterministic ordering in `list_api_keys`.
+- `idx_api_keys_parent_created` (`parent_key_id, created_at ASC`): Composite index optimizing daughter key RBAC filtering and sorting.
+
+### `audit_logs`
+- `idx_audit_logs_timestamp` (`timestamp DESC`): Reverse-chronological global log feeds.
+- `idx_audit_logs_action_timestamp` (`action, timestamp DESC`): Filtered action queries with index order scanning.
+- `idx_audit_logs_api_key_id` (`api_key_id`): Foreign key traversal on `ON DELETE SET NULL`.
+- `idx_audit_logs_key_timestamp` (`api_key_id, timestamp DESC`): Non-master scoped audit feeds without filesort.
+- `idx_audit_logs_client_ip_timestamp` (`client_ip, timestamp DESC`): IP-filtered log queries with index-backed descending sort.
+- `idx_audit_logs_key_name` (`api_key_name`): Key name search queries.
+- `idx_audit_logs_key_prefix` (`api_key_prefix`): Key prefix search queries.
+
+### `fw_zone_rules`
+- `idx_fw_zone_rules_zone` (`zone`): Security zone filtering.
+- `idx_fw_zone_rules_container_name` (`container_name`): Container status correlation on Docker discovery.
+- `idx_fw_zone_rules_enabled_sort` (`enabled, sort_order ASC`): Generator pipeline queries for active zone rules without sort penalty.
+- `idx_fw_zone_rules_sort_order` (`sort_order ASC`): WebUI rule ordering.
+- `idx_fw_zone_rules_zone_sort` (`zone, sort_order ASC`): Composite zone filtering + ordering.
+- `idx_fw_zone_rules_rule_kind` (`rule_kind`): Rule kind filtering (`DockerTCP`, `DockerUDP`, `OpenPortsTCP`, etc.).
+
+### `fw_docker_inter_rules`
+- `idx_fw_docker_inter_rules_source` (`source_container`): Source container updates and lookups.
+- `idx_fw_docker_inter_rules_dest` (`destination_container`): Destination container updates and lookups.
+- `idx_fw_docker_inter_rules_enabled_sort` (`enabled, sort_order ASC`): Generator pipeline queries for active container rules.
+- `idx_fw_docker_inter_rules_sort_order` (`sort_order ASC`): WebUI rule ordering.
+- `idx_fw_docker_inter_rules_network` (`network_name`): Network isolation queries.
+
+### `fw_blocklists`
+- `name` (Unique Index): Unique feed name enforcement.
+- `idx_fw_blocklists_enabled` (`enabled`): Active feed filter.
+- `idx_fw_blocklists_enabled_sort` (`enabled, sort_order ASC`): Generator pipeline queries for active feeds with sorted output.
+- `idx_fw_blocklists_sort_order` (`sort_order ASC`): WebUI list ordering.

@@ -136,12 +136,12 @@ pub async fn import_from_directory(
         settings_model.insert(db).await?;
     }
 
-    let mut docker_inter_count = 0usize;
+    let mut docker_inter_rows = Vec::new();
     for (idx, entry) in parsed.docker_access_between_them.iter().enumerate() {
         let parts: Vec<&str> = entry.split(';').collect();
         if parts.len() >= 5 {
             let ports = parts[4..].join(";");
-            let row = fw_docker_inter_rule::ActiveModel {
+            docker_inter_rows.push(fw_docker_inter_rule::ActiveModel {
                 id: Set(Uuid::new_v4()),
                 source_container: Set(parts[0].trim().to_owned()),
                 destination_container: Set(parts[1].trim().to_owned()),
@@ -153,20 +153,24 @@ pub async fn import_from_directory(
                 sort_order: Set(i32::try_from(idx).unwrap_or(0)),
                 created_at: Set(now),
                 updated_at: Set(now),
-            };
-            row.insert(db).await?;
-            docker_inter_count += 1;
+            });
         }
     }
+    let docker_inter_count = docker_inter_rows.len();
+    if !docker_inter_rows.is_empty() {
+        fw_docker_inter_rule::Entity::insert_many(docker_inter_rows)
+            .exec(db)
+            .await?;
+    }
 
-    let mut zone_count = 0usize;
+    let mut zone_rows = Vec::new();
     for (idx, (zone, rule_kind, val)) in parsed.zone_rules.into_iter().enumerate() {
         let container_name = if rule_kind == "DockerTCP" || rule_kind == "DockerUDP" {
             val.split(',').nth(2).map(|s| s.trim().to_owned())
         } else {
             None
         };
-        let row = fw_zone_rule::ActiveModel {
+        zone_rows.push(fw_zone_rule::ActiveModel {
             id: Set(Uuid::new_v4()),
             zone: Set(zone),
             rule_kind: Set(rule_kind),
@@ -177,9 +181,13 @@ pub async fn import_from_directory(
             sort_order: Set(i32::try_from(idx).unwrap_or(0)),
             created_at: Set(now),
             updated_at: Set(now),
-        };
-        row.insert(db).await?;
-        zone_count += 1;
+        });
+    }
+    let zone_count = zone_rows.len();
+    if !zone_rows.is_empty() {
+        fw_zone_rule::Entity::insert_many(zone_rows)
+            .exec(db)
+            .await?;
     }
 
     let refactored_special = refactor_special_rules_script(&special_raw);
@@ -201,9 +209,9 @@ pub async fn import_from_directory(
     }
 
     let blocklists = parse_get_list_feeds(&get_list_raw);
-    let mut bl_count = 0usize;
+    let mut blocklist_rows = Vec::new();
     for (idx, (name, url, enabled)) in blocklists.into_iter().enumerate() {
-        let row = fw_blocklist::ActiveModel {
+        blocklist_rows.push(fw_blocklist::ActiveModel {
             id: Set(Uuid::new_v4()),
             name: Set(name),
             url: Set(url),
@@ -215,9 +223,13 @@ pub async fn import_from_directory(
             sort_order: Set(i32::try_from(idx).unwrap_or(0)),
             created_at: Set(now),
             updated_at: Set(now),
-        };
-        row.insert(db).await?;
-        bl_count += 1;
+        });
+    }
+    let bl_count = blocklist_rows.len();
+    if !blocklist_rows.is_empty() {
+        fw_blocklist::Entity::insert_many(blocklist_rows)
+            .exec(db)
+            .await?;
     }
 
     Ok(ImportSummary {
@@ -435,7 +447,7 @@ mod tests {
         let input = r#"INTEROut=("eth0" "eth1" "wg0")"#;
         assert_eq!(extract_quoted_items(input), vec!["eth0", "eth1", "wg0"]);
 
-        let empty = r#"INTEROut=()"#;
+        let empty = r"INTEROut=()";
         assert!(extract_quoted_items(empty).is_empty());
     }
 
