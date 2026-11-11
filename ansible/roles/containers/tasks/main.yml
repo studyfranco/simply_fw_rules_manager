@@ -70,11 +70,11 @@
 
 - name: Deploy firewall.tools script if missing
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../scripts_etc/firewall.tools"
+    src: "{{ firewall_scripts_src_dir | default(playbook_dir ~ '/../../scripts_etc') }}/firewall.tools"
     dest: "{{ firewall_dir }}/firewall.tools"
     owner: root
     group: root
-    mode: "0644"
+    mode: "0755"
   ignore_errors: true
 
 - name: Copy hookexecutor private key for simply_hook_executor container

@@ -72,6 +72,9 @@ firewall_dir: "/etc/firewall"
 compose_dir: "{{ firewall_dir }}"
 firewall_secrets_dir: "{{ firewall_dir }}/secrets"
 
+# Source directory for core firewall scripts on controller (from git clone scripts_etc)
+firewall_scripts_src_dir: "{{ playbook_dir }}/../../scripts_etc"
+
 # Container User/Group Isolation
 user_fw_rules_manager: "1128:1128"
 user_hook_executor: "1127:1127"

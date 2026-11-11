@@ -4,7 +4,7 @@
 
 - name: Deploy firewall.tools system library
   ansible.builtin.copy:
-    src: firewall.tools
+    src: "{{ firewall_scripts_src_dir | default(role_path ~ '/../../../scripts_etc') }}/firewall.tools"
     dest: "{{ firewall_dir }}/firewall.tools"
     owner: root
     group: root
@@ -12,7 +12,7 @@
 
 - name: Deploy core firewall packet filtering script
   ansible.builtin.copy:
-    src: firewall
+    src: "{{ firewall_scripts_src_dir | default(role_path ~ '/../../../scripts_etc') }}/firewall"
     dest: "{{ firewall_dir }}/firewall"
     owner: root
     group: root
@@ -20,7 +20,7 @@
 
 - name: Deploy firewall.set.ip ipset and GeoIP loader
   ansible.builtin.copy:
-    src: firewall.set.ip
+    src: "{{ firewall_scripts_src_dir | default(role_path ~ '/../../../scripts_etc') }}/firewall.set.ip"
     dest: "{{ firewall_dir }}/firewall.set.ip"
     owner: root
     group: root
@@ -65,14 +65,6 @@
   ansible.builtin.template:
     src: firewall.launch.block.ip.j2
     dest: "{{ firewall_dir }}/firewall.launch.block.ip"
-    owner: root
-    group: root
-    mode: "0700"
-
-- name: Deploy firewall.get.list threat feeds and whitelist downloader
-  ansible.builtin.template:
-    src: firewall.get.list.j2
-    dest: "{{ firewall_dir }}/firewall.get.list"
     owner: root
     group: root
     mode: "0700"
