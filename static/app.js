@@ -1917,6 +1917,16 @@ function auditRow(a) {
  * ---------------------------------------------------------------------- */
 
 (async function autoRestoreSession() {
+  if (window.location.protocol === 'file:') {
+    showLoginError(
+      "This dashboard must be opened through the daemon's own web server (http:// or https://), " +
+      "not as a local file — opening index.html directly blocks every request this page makes."
+    );
+    document.getElementById("login-form")?.querySelectorAll("input, button")
+      ?.forEach((el) => { el.disabled = true; });
+    return;
+  }
+
   const saved = loadSessionCredentials();
   if (!saved) return;
   try {
