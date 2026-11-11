@@ -88,11 +88,13 @@ pub async fn list_audit_logs(
     Extension(caller): Extension<api_key::Model>,
     StrictQuery(query): StrictQuery<AuditLogQuery>,
 ) -> Result<Json<Vec<AuditLogResponse>>, AppError> {
-    let mut select = AuditLog::find();
-
     if !caller.is_master {
-        select = select.filter(audit_log::Column::ApiKeyId.eq(caller.id));
+        return Err(AppError::Forbidden(
+            "Only master keys can view audit logs".to_owned(),
+        ));
     }
+
+    let mut select = AuditLog::find();
 
     if let Some(action) = query
         .action

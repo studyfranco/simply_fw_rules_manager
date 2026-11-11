@@ -121,11 +121,21 @@ class ApiClient {
     this.signingSecret = signingSecret;
     this.requestBase = detectMountPrefix();
     this.signingBase = normalizeSigningBase(apiBaseOverride);
+    this._lastSigSec = 0;
+    this._lastSigKey = "";
   }
 
-  async request(method, path, bodyObj) {
+  async request(method, path, bodyObj, isRetry = false) {
     const body = bodyObj === undefined ? "" : JSON.stringify(bodyObj);
-    const timestamp = String(Math.floor(Date.now() / 1000));
+    let nowSec = Math.floor(Date.now() / 1000);
+    const sigKey = `${method}\n${this.signingBase}${path}\n${body}`;
+    if (sigKey === this._lastSigKey && nowSec <= this._lastSigSec) {
+      nowSec = this._lastSigSec + 1;
+    }
+    this._lastSigKey = sigKey;
+    this._lastSigSec = nowSec;
+
+    const timestamp = String(nowSec);
     const canonical = `${method}\n${this.signingBase}${path}\n${timestamp}\n${body}`;
     const sigHex = await hmacSha256Hex(this.signingSecret, canonical);
 
@@ -147,7 +157,12 @@ class ApiClient {
     if (res.status === 204) return null;
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const err = new Error(data.error || `HTTP ${res.status}`);
+      const errMsg = data.error || `HTTP ${res.status}`;
+      if (res.status === 401 && !isRetry && (errMsg.includes("already been used") || errMsg.includes("already used") || errMsg.includes("timestamp"))) {
+        await new Promise(r => setTimeout(r, 1100));
+        return this.request(method, path, bodyObj, true);
+      }
+      const err = new Error(errMsg);
       err.status = res.status;
       err.validation = data.validation || null;
       throw err;

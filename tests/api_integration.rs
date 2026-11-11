@@ -499,4 +499,39 @@ async fn key_bound_ips_enforcement_and_daughter_key_rbac() {
     let (st_rbac, err_rbac) = response_json(app.clone().oneshot(req_rbac).await.unwrap()).await;
     assert_eq!(st_rbac, StatusCode::FORBIDDEN);
     assert!(err_rbac["error"].as_str().unwrap().contains("Missing can_manage_keys"));
+
+    // 5. Operator tries to view audit logs -> strictly forbidden (Master-only)
+    let mut req_audit_op = signed_request("GET", "/api/audit-logs", &op_key, &op_secret, None);
+    req_audit_op.extensions_mut().insert(ConnectInfo(allowed_addr));
+    let (st_audit_op, err_audit) = response_json(app.clone().oneshot(req_audit_op).await.unwrap()).await;
+    assert_eq!(st_audit_op, StatusCode::FORBIDDEN);
+    assert_eq!(err_audit["error"], "Only master keys can view audit logs");
+
+    // 6. Master tries to view audit logs -> 200 OK
+    let mut req_audit_master = signed_request("GET", "/api/audit-logs", TEST_MASTER_KEY, TEST_MASTER_SECRET, None);
+    req_audit_master.extensions_mut().insert(ConnectInfo(allowed_addr));
+    let (st_audit_master, _) = response_json(app.clone().oneshot(req_audit_master).await.unwrap()).await;
+    assert_eq!(st_audit_master, StatusCode::OK);
+
+    // 7. Signature prefix enforcement: stripping "sha256=" prefix fails authentication
+    let mut req_prefix = signed_request("GET", "/api/settings", TEST_MASTER_KEY, TEST_MASTER_SECRET, None);
+    req_prefix.extensions_mut().insert(ConnectInfo(allowed_addr));
+    let current_sig = req_prefix.headers().get("X-Signature-256").unwrap().to_str().unwrap().to_owned();
+    let bare_hex = current_sig.strip_prefix("sha256=").unwrap();
+    req_prefix.headers_mut().insert("X-Signature-256", bare_hex.parse().unwrap());
+    let (st_prefix, _) = response_json(app.clone().oneshot(req_prefix).await.unwrap()).await;
+    assert_eq!(st_prefix, StatusCode::UNAUTHORIZED);
+
+    // 8. Anti-replay guard rejects duplicated request
+    let mut req1 = signed_request("GET", "/api/settings?replay_test=1", TEST_MASTER_KEY, TEST_MASTER_SECRET, None);
+    req1.extensions_mut().insert(ConnectInfo(allowed_addr));
+    let (st1, _) = response_json(app.clone().oneshot(req1).await.unwrap()).await;
+    assert_eq!(st1, StatusCode::OK);
+
+    let mut req2 = signed_request("GET", "/api/settings?replay_test=1", TEST_MASTER_KEY, TEST_MASTER_SECRET, None);
+    req2.extensions_mut().insert(ConnectInfo(allowed_addr));
+    // Must fail because signature has already been recorded
+    let (st2, err2) = response_json(app.clone().oneshot(req2).await.unwrap()).await;
+    assert_eq!(st2, StatusCode::UNAUTHORIZED);
+    assert!(err2["error"].as_str().unwrap().contains("already been used"));
 }

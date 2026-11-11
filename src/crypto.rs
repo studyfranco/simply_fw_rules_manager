@@ -94,8 +94,7 @@ pub fn verify_signature(
 ) -> Option<Vec<u8>> {
     let raw_hex = provided
         .trim()
-        .strip_prefix(SIGNATURE_PREFIX)
-        .unwrap_or_else(|| provided.trim());
+        .strip_prefix(SIGNATURE_PREFIX)?;
     let provided_bytes = hex::decode(raw_hex).ok()?;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
     mac.update(&canonical_v1_payload(method, target, timestamp, body));
