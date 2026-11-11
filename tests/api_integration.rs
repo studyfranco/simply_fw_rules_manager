@@ -67,16 +67,16 @@ async fn setup_test_env() -> (axum::Router, AppState) {
     (app, state)
 }
 
-fn signed_request(
+fn signed_request_with_ts(
     method_str: &str,
     uri: &str,
     api_key: &str,
     signing_secret: &str,
     body_opt: Option<&Value>,
+    timestamp: &str,
 ) -> Request<Body> {
     let body_bytes = body_opt.map_or_else(Vec::new, |v| serde_json::to_vec(v).expect("json bytes"));
-    let timestamp = Utc::now().timestamp().to_string();
-    let sig = compute_signature(signing_secret, method_str, uri, &timestamp, &body_bytes)
+    let sig = compute_signature(signing_secret, method_str, uri, timestamp, &body_bytes)
         .expect("compute signature");
 
     let mut builder = Request::builder()
@@ -91,6 +91,17 @@ fn signed_request(
     }
 
     builder.body(Body::from(body_bytes)).expect("build request")
+}
+
+fn signed_request(
+    method_str: &str,
+    uri: &str,
+    api_key: &str,
+    signing_secret: &str,
+    body_opt: Option<&Value>,
+) -> Request<Body> {
+    let timestamp = Utc::now().timestamp().to_string();
+    signed_request_with_ts(method_str, uri, api_key, signing_secret, body_opt, &timestamp)
 }
 
 async fn response_json(resp: axum::response::Response) -> (StatusCode, Value) {
@@ -523,12 +534,13 @@ async fn key_bound_ips_enforcement_and_daughter_key_rbac() {
     assert_eq!(st_prefix, StatusCode::UNAUTHORIZED);
 
     // 8. Anti-replay guard rejects duplicated request
-    let mut req1 = signed_request("GET", "/api/settings?replay_test=1", TEST_MASTER_KEY, TEST_MASTER_SECRET, None);
+    let replay_ts = Utc::now().timestamp().to_string();
+    let mut req1 = signed_request_with_ts("GET", "/api/settings?replay_test=1", TEST_MASTER_KEY, TEST_MASTER_SECRET, None, &replay_ts);
     req1.extensions_mut().insert(ConnectInfo(allowed_addr));
     let (st1, _) = response_json(app.clone().oneshot(req1).await.unwrap()).await;
     assert_eq!(st1, StatusCode::OK);
 
-    let mut req2 = signed_request("GET", "/api/settings?replay_test=1", TEST_MASTER_KEY, TEST_MASTER_SECRET, None);
+    let mut req2 = signed_request_with_ts("GET", "/api/settings?replay_test=1", TEST_MASTER_KEY, TEST_MASTER_SECRET, None, &replay_ts);
     req2.extensions_mut().insert(ConnectInfo(allowed_addr));
     // Must fail because signature has already been recorded
     let (st2, err2) = response_json(app.clone().oneshot(req2).await.unwrap()).await;

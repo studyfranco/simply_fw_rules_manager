@@ -37,8 +37,10 @@
           <label for="login-api-base">API Base Path Override</label>
           <input type="text" id="login-api-base" class="input-field" placeholder="/api" autocomplete="off">
           <small class="field-hint">
-            Leave blank unless a reverse proxy forwards its mount prefix through untouched instead
-            of stripping it.
+            Leave blank unless a reverse proxy rewrites the path. Signatures must cover the path the
+            <em>server</em> sees: if the proxy strips a prefix (<code>/fw_rules_manager/api/...</code> →
+            <code>/api/...</code>), keep <code>/api</code>; if it forwards the prefix untouched, set
+            <code>/fw_rules_manager/api</code>. Requests themselves are always sent relative to this page.
           </small>
         </div>
         <button type="submit" class="btn btn-primary">Unlock Dashboard</button>
@@ -50,7 +52,7 @@
   <!-- ═══════════════════════════════════════ -->
   <!-- Dashboard                                -->
   <!-- ═══════════════════════════════════════ -->
-  <div id="dashboard-container" class="hidden">
+  <div id="dashboard-container" class="container hidden">
 
     <div id="top-bar" class="top-bar">
       <header class="header">
@@ -77,8 +79,7 @@
       </nav>
     </div>
 
-    <div class="container">
-      <main id="tab-settings" class="tab-panel active"></main>
+    <main id="tab-settings" class="tab-panel active"></main>
       <main id="tab-docker" class="tab-panel"></main>
       <main id="tab-special-rules" class="tab-panel"></main>
       <main id="tab-blocklists" class="tab-panel"></main>
@@ -134,7 +135,6 @@
           </div>
         </section>
       </main>
-    </div>
 
   </div>
 
