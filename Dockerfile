@@ -7,6 +7,8 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
 COPY src src
 COPY static static
+COPY fixtures fixtures
+COPY scripts_etc scripts_etc
 
 RUN set -x \
     && apt update \
