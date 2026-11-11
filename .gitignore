@@ -8,3 +8,4 @@ target/*
 example/*
 ansible/inventory/hosts.ini
 ansible/*.retry
+Cargo.lock
