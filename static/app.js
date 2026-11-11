@@ -321,6 +321,97 @@ document.getElementById("logout-btn")?.addEventListener("click", onLogout);
 const onRefresh = () => loadTab(activeTab);
 document.getElementById("refresh-btn")?.addEventListener("click", onRefresh);
 
+// Key Modal & Secret Reveal Event Listeners
+document.getElementById("kf-cancel")?.addEventListener("click", () => {
+  document.getElementById("create-key-modal")?.classList.add("hidden");
+});
+document.getElementById("create-key-close-x")?.addEventListener("click", () => {
+  document.getElementById("create-key-modal")?.classList.add("hidden");
+});
+document.getElementById("create-key-modal")?.addEventListener("click", (e) => {
+  if (e.target.id === "create-key-modal") {
+    document.getElementById("create-key-modal")?.classList.add("hidden");
+  }
+});
+document.getElementById("key-editor-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const existing = currentEditingKey;
+  const isMasterTarget = Boolean(existing?.is_master);
+  try {
+    if (existing) {
+      const payload = {
+        bound_ips: document.getElementById("kf-bound-ips").value.trim(),
+      };
+      if (!isMasterTarget) {
+        payload.name = document.getElementById("kf-name").value.trim();
+        if (me.is_master) {
+          payload.can_manage_keys = document.getElementById("kf-manage-keys")?.checked || false;
+          payload.can_manage_settings = document.getElementById("kf-manage-settings")?.checked || false;
+          payload.can_manage_special_rules = document.getElementById("kf-manage-special")?.checked || false;
+          payload.can_manage_blocklists = document.getElementById("kf-manage-blocklists")?.checked || false;
+          payload.can_deploy_and_reload = document.getElementById("kf-deploy")?.checked || false;
+        }
+      }
+      await client.put(`/api/keys/${existing.id}`, payload);
+      toast("API key updated", "success");
+      document.getElementById("create-key-modal")?.classList.add("hidden");
+      await renderKeysTab();
+    } else {
+      const payload = {
+        name: document.getElementById("kf-name").value.trim(),
+        bound_ips: document.getElementById("kf-bound-ips").value.trim() || null,
+        ...(me.is_master ? {
+          can_manage_keys: document.getElementById("kf-manage-keys")?.checked || false,
+          can_manage_settings: document.getElementById("kf-manage-settings")?.checked || false,
+          can_manage_special_rules: document.getElementById("kf-manage-special")?.checked || false,
+          can_manage_blocklists: document.getElementById("kf-manage-blocklists")?.checked || false,
+          can_deploy_and_reload: document.getElementById("kf-deploy")?.checked || false,
+        } : {}),
+      };
+      const res = await client.post("/api/keys", payload);
+      document.getElementById("create-key-modal")?.classList.add("hidden");
+      await renderKeysTab();
+      showIssuedSecretBanner(`Created Key '${res.key.name}'`, res.api_key, res.signing_secret);
+    }
+  } catch (err) {
+    toast("Save key failed: " + err.message, "error");
+  }
+});
+
+document.getElementById("secret-reveal-done")?.addEventListener("click", () => {
+  document.getElementById("secret-reveal-modal")?.classList.add("hidden");
+});
+document.getElementById("secret-reveal-modal")?.addEventListener("click", (e) => {
+  if (e.target.id === "secret-reveal-modal") {
+    document.getElementById("secret-reveal-modal")?.classList.add("hidden");
+  }
+});
+document.getElementById("btn-copy-secret-key")?.addEventListener("click", () => {
+  const text = document.getElementById("secret-reveal-key-val")?.textContent;
+  if (text) {
+    navigator.clipboard?.writeText(text);
+    const btn = document.getElementById("btn-copy-secret-key");
+    if (btn) {
+      btn.textContent = "Copied!";
+      setTimeout(() => (btn.textContent = "Copy"), 1500);
+    }
+  }
+});
+document.getElementById("btn-copy-secret-val")?.addEventListener("click", () => {
+  const text = document.getElementById("secret-reveal-secret-val")?.textContent;
+  if (text) {
+    navigator.clipboard?.writeText(text);
+    const btn = document.getElementById("btn-copy-secret-val");
+    if (btn) {
+      btn.textContent = "Copied!";
+      setTimeout(() => (btn.textContent = "Copy"), 1500);
+    }
+  }
+});
+window.addEventListener("scroll", () => {
+  document.getElementById("top-bar")?.classList.toggle("stuck", window.scrollY > 4);
+}, { passive: true });
+
 /* ---------------------------------------------------------------------- *
  * Tab Navigation
  * ---------------------------------------------------------------------- */
@@ -1547,98 +1638,83 @@ function renderKeyRow(k, canManage) {
   </tr>`;
 }
 
+let currentEditingKey = null;
+
 function showIssuedSecretBanner(title, apiKey, signingSecret) {
-  const banner = document.getElementById("key-credentials-banner");
-  if (!banner) return;
-  banner.innerHTML = `
-    <div class="card" style="margin-bottom:1rem;border-color:var(--accent);">
-      <h3>${escapeHtml(title)} (Copy now — shown only once)</h3>
-      ${apiKey ? `<p class="font-mono text-sm" style="margin-top:0.5rem;"><strong>API Key:</strong> <code>${escapeHtml(apiKey)}</code></p>` : ""}
-      ${signingSecret ? `<p class="font-mono text-sm" style="margin-top:0.35rem;"><strong>Signing Secret:</strong> <code>${escapeHtml(signingSecret)}</code></p>` : ""}
-    </div>
-  `;
+  const modal = document.getElementById("secret-reveal-modal");
+  const titleEl = document.getElementById("secret-reveal-title");
+  const keyRow = document.getElementById("secret-reveal-key-row");
+  const keyVal = document.getElementById("secret-reveal-key-val");
+  const secretRow = document.getElementById("secret-reveal-secret-row");
+  const secretVal = document.getElementById("secret-reveal-secret-val");
+
+  if (titleEl) titleEl.textContent = title;
+  if (keyRow && keyVal) {
+    if (apiKey) {
+      keyRow.classList.remove("hidden");
+      keyVal.textContent = apiKey;
+    } else {
+      keyRow.classList.add("hidden");
+    }
+  }
+  if (secretRow && secretVal) {
+    if (signingSecret) {
+      secretRow.classList.remove("hidden");
+      secretVal.textContent = signingSecret;
+    } else {
+      secretRow.classList.add("hidden");
+    }
+  }
+  if (modal) modal.classList.remove("hidden");
 }
 
 function showKeyForm(existing) {
-  const slot = document.getElementById("key-form-slot");
+  currentEditingKey = existing || null;
   const isMasterTarget = Boolean(existing?.is_master);
-  slot.innerHTML = `
-    <form id="key-editor-form" class="card" style="margin-bottom:1rem;background:var(--bg-input);">
-      <h3>${existing ? `Edit Key: ${escapeHtml(existing.name)}` : "Create New Sub-Key"}</h3>
-      <div class="grid-2" style="margin-top:0.75rem;">
-        <div class="form-group">
-          <label for="kf-name">Key Name</label>
-          <input type="text" id="kf-name" class="input-field" value="${escapeHtml(existing?.name || "")}" ${isMasterTarget ? "disabled" : "required"}>
-        </div>
-        <div class="form-group">
-          <label for="kf-bound-ips">Bound IPs / CIDRs (comma-separated, optional)</label>
-          <input type="text" id="kf-bound-ips" class="input-field font-mono" value="${escapeHtml(existing?.bound_ips || "")}" placeholder="10.0.0.0/8, 192.168.1.10">
-        </div>
-      </div>
-      ${me.is_master && !isMasterTarget ? `
-        <div class="permissions-grid mt-2 mb-4">
-          <label class="checkbox-container"><input type="checkbox" id="kf-manage-keys" ${existing?.can_manage_keys ? "checked" : ""}> <span>can_manage_keys</span></label>
-          <label class="checkbox-container"><input type="checkbox" id="kf-manage-settings" ${existing?.can_manage_settings ? "checked" : ""}> <span>can_manage_settings</span></label>
-          <label class="checkbox-container"><input type="checkbox" id="kf-manage-special" ${existing?.can_manage_special_rules ? "checked" : ""}> <span>can_manage_special_rules</span></label>
-          <label class="checkbox-container"><input type="checkbox" id="kf-manage-blocklists" ${existing?.can_manage_blocklists ? "checked" : ""}> <span>can_manage_blocklists</span></label>
-          <label class="checkbox-container"><input type="checkbox" id="kf-deploy" ${existing?.can_deploy_and_reload ? "checked" : ""}> <span>can_deploy_and_reload</span></label>
-        </div>
-      ` : !isMasterTarget ? `
-        <p class="text-muted text-sm" style="margin-top:0.5rem;">Only the Master key may grant global scopes (R4). Keys you create are Daughter keys holding no management scopes.</p>
-      ` : `<p class="text-muted text-sm" style="margin-top:0.5rem;">Master key permissions are immutable; only <code>bound_ips</code> may be updated.</p>`}
-      <div style="display:flex;gap:0.5rem;margin-top:0.75rem;">
-        <button type="submit" class="btn btn-primary">${existing ? "Save Changes" : "Create Key"}</button>
-        <button type="button" id="kf-cancel" class="btn btn-secondary">Cancel</button>
-      </div>
-    </form>
-  `;
+  const modal = document.getElementById("create-key-modal");
+  const modalTitle = document.getElementById("create-key-modal-title");
+  const nameInput = document.getElementById("kf-name");
+  const boundIpsInput = document.getElementById("kf-bound-ips");
+  const submitBtn = document.getElementById("kf-submit-btn");
+  const scopesGrid = document.getElementById("kf-scopes-grid");
+  const scopesNote = document.getElementById("kf-scopes-note");
 
-  document.getElementById("kf-cancel").addEventListener("click", () => {
-    slot.innerHTML = "";
-  });
+  if (modalTitle) modalTitle.textContent = existing ? `Edit Key: ${existing.name}` : "Create API Key";
+  if (submitBtn) submitBtn.textContent = existing ? "Save Changes" : "Create Key";
+  if (nameInput) {
+    nameInput.value = existing?.name || "";
+    nameInput.disabled = isMasterTarget;
+  }
+  if (boundIpsInput) {
+    boundIpsInput.value = existing?.bound_ips || "";
+  }
 
-  document.getElementById("key-editor-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    try {
-      if (existing) {
-        const payload = {
-          bound_ips: document.getElementById("kf-bound-ips").value.trim(),
-        };
-        if (!isMasterTarget) {
-          payload.name = document.getElementById("kf-name").value.trim();
-          if (me.is_master) {
-            payload.can_manage_keys = document.getElementById("kf-manage-keys")?.checked || false;
-            payload.can_manage_settings = document.getElementById("kf-manage-settings")?.checked || false;
-            payload.can_manage_special_rules = document.getElementById("kf-manage-special")?.checked || false;
-            payload.can_manage_blocklists = document.getElementById("kf-manage-blocklists")?.checked || false;
-            payload.can_deploy_and_reload = document.getElementById("kf-deploy")?.checked || false;
-          }
-        }
-        await client.put(`/api/keys/${existing.id}`, payload);
-        toast("API key updated", "success");
-        slot.innerHTML = "";
-        await renderKeysTab();
-      } else {
-        const payload = {
-          name: document.getElementById("kf-name").value.trim(),
-          bound_ips: document.getElementById("kf-bound-ips").value.trim() || null,
-          ...(me.is_master ? {
-            can_manage_keys: document.getElementById("kf-manage-keys")?.checked || false,
-            can_manage_settings: document.getElementById("kf-manage-settings")?.checked || false,
-            can_manage_special_rules: document.getElementById("kf-manage-special")?.checked || false,
-            can_manage_blocklists: document.getElementById("kf-manage-blocklists")?.checked || false,
-            can_deploy_and_reload: document.getElementById("kf-deploy")?.checked || false,
-          } : {}),
-        };
-        const res = await client.post("/api/keys", payload);
-        slot.innerHTML = "";
-        await renderKeysTab();
-        showIssuedSecretBanner(`Created Key '${res.key.name}'`, res.api_key, res.signing_secret);
-      }
-    } catch (err) {
-      toast("Save key failed: " + err.message, "error");
+  if (me.is_master && !isMasterTarget) {
+    if (scopesGrid) {
+      scopesGrid.classList.remove("hidden");
+      const kfManageKeys = document.getElementById("kf-manage-keys");
+      const kfManageSettings = document.getElementById("kf-manage-settings");
+      const kfManageSpecial = document.getElementById("kf-manage-special");
+      const kfManageBlocklists = document.getElementById("kf-manage-blocklists");
+      const kfDeploy = document.getElementById("kf-deploy");
+      if (kfManageKeys) kfManageKeys.checked = Boolean(existing?.can_manage_keys);
+      if (kfManageSettings) kfManageSettings.checked = Boolean(existing?.can_manage_settings);
+      if (kfManageSpecial) kfManageSpecial.checked = Boolean(existing?.can_manage_special_rules);
+      if (kfManageBlocklists) kfManageBlocklists.checked = Boolean(existing?.can_manage_blocklists);
+      if (kfDeploy) kfDeploy.checked = Boolean(existing?.can_deploy_and_reload);
     }
-  });
+    if (scopesNote) scopesNote.classList.add("hidden");
+  } else {
+    if (scopesGrid) scopesGrid.classList.add("hidden");
+    if (scopesNote) {
+      scopesNote.classList.remove("hidden");
+      scopesNote.textContent = isMasterTarget
+        ? "Master key permissions are immutable; only bound_ips may be updated."
+        : "Only the Master key may grant global scopes (R4). Keys you create are Daughter keys holding no management scopes.";
+    }
+  }
+
+  if (modal) modal.classList.remove("hidden");
 }
 
 /* ---------------------------------------------------------------------- *
