@@ -58,12 +58,15 @@ pub struct ValidationReport {
     pub known_constants_count: usize,
 }
 
+/// Embedded reference `firewall.tools` script used as fallback when not accessible on disk.
+pub const DEFAULT_FIREWALL_TOOLS: &str = include_str!("../scripts_etc/firewall.tools");
+
 /// Parses `@fn`, `@usage`, and `@desc` annotations (or function declarations) from `firewall.tools`.
 #[must_use]
 pub fn parse_tools_functions(tools_path: &Path) -> Vec<ToolFunctionDoc> {
     let raw = std::fs::read_to_string(tools_path)
         .or_else(|_| std::fs::read_to_string("scripts_etc/firewall.tools"))
-        .unwrap_or_default();
+        .unwrap_or_else(|_| DEFAULT_FIREWALL_TOOLS.to_owned());
 
     let mut docs = Vec::new();
     let mut current_fn: Option<String> = None;
@@ -173,7 +176,7 @@ pub fn collect_known_variables(tools_path: &Path) -> HashSet<String> {
 
     let raw = std::fs::read_to_string(tools_path)
         .or_else(|_| std::fs::read_to_string("scripts_etc/firewall.tools"))
-        .unwrap_or_default();
+        .unwrap_or_else(|_| DEFAULT_FIREWALL_TOOLS.to_owned());
 
     extract_defined_variables_from_script(&raw, &mut known);
     known

@@ -1,0 +1,6 @@
+#!/bin/bash
+# Synthetic reference blocklist feeds for testing and bootstrap seeding.
+# Contains NO API keys, tokens, or production endpoints.
+
+generate_list "https://example.org/blocklists/sample_threats.txt" "sample_threats"
+# generate_list "https://example.org/blocklists/disabled_feed.txt" "disabled_feed"

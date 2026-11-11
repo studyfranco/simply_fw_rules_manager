@@ -1,0 +1,24 @@
+#!/bin/bash
+# Synthetic reference special rules for testing and bootstrap seeding.
+# Contains NO production keys, credentials, or private server data.
+
+source /etc/firewall/firewall.tools
+source /etc/firewall/firewall.settings
+
+add_cloud() {
+  local traefik_ip
+  traefik_ip=$(get_container_ipv4_on_network "traefik" "ext")
+}
+
+add_plex() {
+  local plex_ip
+  plex_ip=$(get_container_ipv4_on_network "plexmediaserver" "ext")
+}
+
+add_pihole() {
+  local pihole_ip
+  pihole_ip=$(get_container_ipv4_on_network "pihole" "pihole")
+}
+
+wait
+exit 0

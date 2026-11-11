@@ -1,0 +1,26 @@
+#!/bin/bash
+# Synthetic reference firewall settings for testing and bootstrap seeding.
+# Contains NO production keys, credentials, or private server data.
+
+mainInter="out"
+INTEROut=( "out" )
+interfaceToGoOutSide=( "out" )
+internInterfaceHaveAccessAsLocal=()
+interfaceLocal=( "lo" )
+declare -A interfaceWithDHCP=( ["out"]=0 )
+interfaceWithNoRules=()
+dockerNetworkWithInternetAccess=( "ext" )
+dockerNetworkWithAccess=( "isolate" )
+dockerAccessBetweenThem=( "traefik;jellyfin_theatre;isolate;tcp;8096" "traefik;prowlarr;ext;tcp;9696" )
+IPAutor=()
+IPAutorDnatPortTCP=()
+IPAutorDnatPortUDP=()
+countryOpenPort="FR,CH"
+blockedCountry="CN,RU"
+blockedCountry2=""
+WWDockerTCP=( "443,ext,traefik,443" )
+openDockerTCP=( "32400,ext,plexmediaserver,32400" )
+WWopenPortTCP=()
+WWopenPortUDP=()
+openPortTCP=()
+openPortUDP=()

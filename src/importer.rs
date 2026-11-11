@@ -31,6 +31,16 @@ pub struct ImportSummary {
     pub special_rules_imported: bool,
 }
 
+/// Embedded synthetic default settings used when no custom files are provided on disk.
+pub const DEFAULT_SETTINGS: &str = include_str!("../fixtures/default_firewall/firewall.settings");
+
+/// Embedded synthetic default special rules script.
+pub const DEFAULT_SPECIAL_RULES: &str =
+    include_str!("../fixtures/default_firewall/firewall.rules.special");
+
+/// Embedded synthetic default blocklist feeds configuration.
+pub const DEFAULT_GET_LIST: &str = include_str!("../fixtures/default_firewall/firewall.get.list");
+
 /// Seeds the database from `default_example_dir` if `fw_settings` (id=1) is not yet present.
 ///
 /// # Errors
@@ -62,9 +72,29 @@ pub async fn import_from_directory(
     let special_path = dir.join("firewall.rules.special");
     let get_list_path = dir.join("firewall.get.list");
 
-    let settings_raw = std::fs::read_to_string(&settings_path).unwrap_or_default();
-    let special_raw = std::fs::read_to_string(&special_path).unwrap_or_default();
-    let get_list_raw = std::fs::read_to_string(&get_list_path).unwrap_or_default();
+    let fallback_to_defaults = dir == Path::new("example/MainServ/etc_firewall") || !dir.exists();
+
+    let settings_raw = std::fs::read_to_string(&settings_path).unwrap_or_else(|_| {
+        if fallback_to_defaults {
+            DEFAULT_SETTINGS.to_owned()
+        } else {
+            String::new()
+        }
+    });
+    let special_raw = std::fs::read_to_string(&special_path).unwrap_or_else(|_| {
+        if fallback_to_defaults {
+            DEFAULT_SPECIAL_RULES.to_owned()
+        } else {
+            String::new()
+        }
+    });
+    let get_list_raw = std::fs::read_to_string(&get_list_path).unwrap_or_else(|_| {
+        if fallback_to_defaults {
+            DEFAULT_GET_LIST.to_owned()
+        } else {
+            String::new()
+        }
+    });
 
     let parsed = parse_firewall_settings(&settings_raw);
 
