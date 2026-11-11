@@ -1,7 +1,7 @@
 #! /bin/bash
 # ==============================================================================
 # Managed by Ansible: Simply Firewall Main Settings
-# Permissions: 0600 root:root
+# Permissions: 0600 1128:root (Managed by simply_fw_rules_manager)
 # ==============================================================================
 
 source {{ firewall_dir }}/firewall.tools
@@ -22,7 +22,12 @@ declare -a dockerNetworkWithAccess=("{{ docker_net_isolate_name }}" "{{ docker_n
 declare -a dockerAccessBetweenThem=()
 
 # Trusted Administration IPs
-declare -a IPAutor=({{ (firewall_trusted_ips | default([])) | map('quote') | join(' ') }})
+declare -a IPAutor=({{ (operator_whitelist_ips | default([]) + (firewall_trusted_ips | default([]))) | map('quote') | join(' ') }})
+{% if ssh_access_mode == 'whitelist_only' %}
+declare -a IPAutorPortTCP=("{{ effective_sshd_port }}")
+{% else %}
+declare -a IPAutorPortTCP=()
+{% endif %}
 declare -a IPAutorDnatPortTCP=()
 declare -a IPAutorDnatPortUDP=()
 declare -a IPAutorDockerTCP=()
@@ -38,15 +43,34 @@ declare -a internalDnatPortUDP=()
 declare -a internalDockerTCP=()
 declare -a internalDockerUDP=()
 
+# Country-Restricted (CR) Open Ports via GeoIP
+declare -a countryOpenPort="{{ country_open_port_default | default('FR') }}"
+{% if ssh_access_mode == 'country_restricted' %}
+declare -a openPortTCP=("{{ effective_sshd_port }}")
+{% else %}
+declare -a openPortTCP=()
+{% endif %}
+declare -a openPortUDP=()
+declare -a redirectPortTCP=()
+declare -a redirectPortUDP=()
+declare -a dnatPortTCP=()
+declare -a dnatPortUDP=()
+declare -a dockerTCP=()
+declare -a dockerUDP=()
+
 # WW (World Wide) Open Ports
-declare -a WWOpenPortsTCP=("{{ effective_sshd_port }}")
-declare -a WWOpenPortsUDP=()
-declare -a WWRedirectPortTCP=()
-declare -a WWRedirectPortUDP=()
-declare -a WWDnatPortTCP=()
-declare -a WWDnatPortUDP=()
-declare -a WWDockerTCP=()
-declare -a WWDockerUDP=()
+{% if ssh_access_mode == 'worldwide' %}
+declare -a WWopenPortTCP=("{{ effective_sshd_port }}")
+{% else %}
+declare -a WWopenPortTCP=()
+{% endif %}
+declare -a WWopenPortUDP=()
+declare -a WWredirectPortTCP=()
+declare -a WWredirectPortUDP=()
+declare -a WWdnatPortTCP=()
+declare -a WWdnatPortUDP=()
+declare -a WWdockerTCP=()
+declare -a WWdockerUDP=()
 
 # Outbound Allowed Ports
 declare -a openPortsOutSideTCP=("80" "443" "53")
@@ -61,4 +85,3 @@ declare -a openDockerUDP=()
 # Blocked Country Codes (GeoIP)
 declare -a blocked_country=({{ (firewall_blocked_countries | default([])) | map('quote') | join(' ') }})
 declare -a blocked_country_2=()
-declare -a open_country=()

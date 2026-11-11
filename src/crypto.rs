@@ -111,15 +111,14 @@ pub enum SecretCipher {
 }
 
 impl SecretCipher {
-    /// Builds a cipher from `FW_ENCRYPTION_KEY` (or `SYNC_ENCRYPTION_KEY`).
+    /// Builds a cipher from `FW_ENCRYPTION_KEY` (or `SYNC_ENCRYPTION_KEY`), supporting `_FILE`
+    /// and `/run/secrets/` Docker secrets.
     ///
     /// # Errors
     /// Returns [`CryptoError::InvalidKey`] if the key is present but not 64 hex chars.
     pub fn from_env() -> Result<Self, CryptoError> {
-        let configured = std::env::var(ENCRYPTION_KEY_ENV)
-            .or_else(|_| std::env::var("SYNC_ENCRYPTION_KEY"))
-            .ok()
-            .filter(|raw| !raw.trim().is_empty());
+        let configured = crate::config::get_secret_or_env(ENCRYPTION_KEY_ENV)
+            .or_else(|| crate::config::get_secret_or_env("SYNC_ENCRYPTION_KEY"));
         match configured {
             Some(raw) => Self::from_hex_key(raw.trim()),
             None => Ok(Self::Plaintext),

@@ -9,6 +9,11 @@ services:
     container_name: {{ postgres_container_name }}
     hostname: postgres
     restart: unless-stopped
+    user: "70:70"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       - POSTGRES_DB={{ postgres_db_name }}
       - POSTGRES_USER={{ postgres_user }}
@@ -24,16 +29,56 @@ services:
       retries: 5
 {% endif %}
 
+  socket_proxy:
+    image: {{ image_socket_proxy }}
+    container_name: socket_proxy
+    hostname: socket_proxy
+    restart: unless-stopped
+    read_only: true
+    user: "65534:65534"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - CONTAINERS=1
+      - NETWORKS=1
+      - POST=0
+      - DELETE=0
+      - BUILD=0
+      - EXEC=0
+      - VOLUMES=0
+      - SWARM=0
+      - SERVICES=0
+      - NODES=0
+      - INFO=0
+      - LOG_LEVEL=warn
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - {{ docker_net_isolate_name }}
+
   simply_fw_rules_manager:
     image: {{ image_fw_rules_manager }}
     container_name: simply_fw_rules_manager
     hostname: simply_fw_rules_manager
     restart: unless-stopped
+    user: "{{ user_fw_rules_manager }}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    expose:
+      - "3000"
     ports:
       - "127.0.0.1:3004:3000"
+    secrets:
+      - fw_encryption_key
+      - hook_executor_signing_secret
+      - hook_executor_api_key
     environment:
       - TZ=Europe/Paris
-      - RUST_LOG=info
+      - RUST_LOG={{ container_log_level }}
 {% if database_type == 'postgres_container' %}
       - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_container_name }}:5432/{{ postgres_db_name }}
 {% elif database_type == 'postgres_external' %}
@@ -41,18 +86,31 @@ services:
 {% else %}
       - DATABASE_URL=sqlite:///app/data/simply_fw_rules_manager.db?mode=rwc
 {% endif %}
+      - FW_ENCRYPTION_KEY_FILE=/run/secrets/fw_encryption_key
       - HOOK_EXECUTOR_URL=http://simply_hook_executor:3000
+      - HOOK_EXECUTOR_API_KEY_FILE=/run/secrets/hook_executor_api_key
+      - HOOK_EXECUTOR_SIGNING_SECRET_FILE=/run/secrets/hook_executor_signing_secret
+      - DOCKER_ENDPOINT=http://socket_proxy:2375
+      - FW_OUTPUT_DIR={{ firewall_dir }}
+      - FW_TOOLS_PATH={{ firewall_dir }}/firewall.tools
     volumes:
       - {{ compose_dir }}/config_simply_fw_rules_manager:/app/data:rw
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - {{ firewall_dir }}:/etc/firewall:rw
+      - {{ firewall_dir }}/firewall.settings:/etc/firewall/firewall.settings:rw
+      - {{ firewall_dir }}/firewall.rules.special:/etc/firewall/firewall.rules.special:rw
+      - {{ firewall_dir }}/firewall.get.list:/etc/firewall/firewall.get.list:rw
+      - {{ firewall_dir }}/firewall.tools:/etc/firewall/firewall.tools:ro
       - /etc/localtime:/etc/localtime:ro
+    tmpfs:
+      - "/run:exec,mode=777"
+      - "/tmp:exec,mode=777"
+      - "/var/tmp:exec,mode=777"
     networks:
       - {{ docker_net_isolate_name }}
-{% if database_type == 'postgres_container' %}
+      - {{ docker_net_ext_name }}
     depends_on:
-      postgres:
-        condition: service_healthy
+      - socket_proxy
+{% if database_type == 'postgres_container' %}
+      - postgres
 {% endif %}
 
   simply_hook_executor:
@@ -60,12 +118,18 @@ services:
     container_name: simply_hook_executor
     hostname: simply_hook_executor
     restart: unless-stopped
-    user: "1127:1127"
+    user: "{{ user_hook_executor }}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     expose:
       - "3000"
+    secrets:
+      - hook_executor_signing_secret
     environment:
       - TZ=Europe/Paris
-      - RUST_LOG=warn
+      - RUST_LOG={{ container_log_level }}
 {% if database_type == 'postgres_container' %}
       - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_container_name }}:5432/{{ postgres_db_name }}
 {% elif database_type == 'postgres_external' %}
@@ -73,12 +137,16 @@ services:
 {% else %}
       - DATABASE_URL=sqlite:///config/simply_hook_executor.db?mode=rwc
 {% endif %}
-      - SIGNING_SECRET_KEY={{ hook_executor_signing_secret }}
+      - SIGNING_SECRET_KEY_FILE=/run/secrets/hook_executor_signing_secret
       - REQUIRE_SIGNED_REQUESTS=false
       - ALLOWED_ENV_VARS=PATH,LANG,TERM
     volumes:
       - {{ compose_dir }}/config_simply_hook_executor:/config:rw
       - /etc/localtime:/etc/localtime:ro
+    tmpfs:
+      - "/run:exec,mode=777"
+      - "/tmp:exec,mode=777"
+      - "/var/tmp:exec,mode=777"
     networks:
       - {{ docker_net_isolate_name }}
 {% if hook_executor_allow_ext_network %}
@@ -98,6 +166,8 @@ services:
     read_only: true
     cap_add:
       - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
     environment:
       - TZ=Europe/Paris
     volumes:
@@ -119,12 +189,20 @@ services:
     container_name: simply_ip_vault
     hostname: simply_ip_vault
     restart: unless-stopped
-    user: "1124:1124"
+    user: "{{ user_ip_vault }}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    expose:
+      - "3000"
     ports:
       - "127.0.0.1:3000:3000"
+    secrets:
+      - vault_encryption_key
     environment:
       - TZ=Europe/Paris
-      - RUST_LOG=warn
+      - RUST_LOG={{ container_log_level }}
 {% if database_type == 'postgres_container' %}
       - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_container_name }}:5432/{{ postgres_db_name }}
 {% elif database_type == 'postgres_external' %}
@@ -133,10 +211,14 @@ services:
       - DATABASE_URL=sqlite:///config/simply_ip_vault.db?mode=rwc
 {% endif %}
       - ALLOW_PRIVATE_WEBHOOKS=true
-      - VAULT_ENCRYPTION_KEY={{ vault_encryption_key }}
+      - VAULT_ENCRYPTION_KEY_FILE=/run/secrets/vault_encryption_key
     volumes:
       - {{ compose_dir }}/config_simply_ip_vault:/config:rw
       - /etc/localtime:/etc/localtime:ro
+    tmpfs:
+      - "/run:exec,mode=777"
+      - "/tmp:exec,mode=777"
+      - "/var/tmp:exec,mode=777"
     networks:
       - {{ docker_net_isolate_name }}
       - {{ docker_net_ext_name }}
@@ -153,12 +235,20 @@ services:
     container_name: simply_ip_sync
     hostname: simply_ip_sync
     restart: unless-stopped
-    user: "1126:1126"
+    user: "{{ user_ip_sync }}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    expose:
+      - "3003"
     ports:
       - "127.0.0.1:3003:3003"
+    secrets:
+      - sync_encryption_key
     environment:
       - TZ=Europe/Paris
-      - RUST_LOG=warn
+      - RUST_LOG={{ container_log_level }}
 {% if database_type == 'postgres_container' %}
       - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_container_name }}:5432/{{ postgres_db_name }}
 {% elif database_type == 'postgres_external' %}
@@ -166,11 +256,15 @@ services:
 {% else %}
       - DATABASE_URL=sqlite:///config/simply_ip_sync.db?mode=rwc
 {% endif %}
-      - SYNC_ENCRYPTION_KEY={{ sync_encryption_key }}
+      - SYNC_ENCRYPTION_KEY_FILE=/run/secrets/sync_encryption_key
       - ALLOW_PRIVATE_WEBHOOKS=true
     volumes:
       - {{ compose_dir }}/config_simply_ip_sync:/config:rw
       - /etc/localtime:/etc/localtime:ro
+    tmpfs:
+      - "/run:exec,mode=777"
+      - "/tmp:exec,mode=777"
+      - "/var/tmp:exec,mode=777"
     networks:
       - {{ docker_net_ext_name }}
       - {{ docker_net_isolate_name }}
@@ -182,12 +276,22 @@ services:
     container_name: simply_ip_exporter
     hostname: simply_ip_exporter
     restart: unless-stopped
-    user: "1125:1125"
+    user: "{{ user_ip_exporter }}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    expose:
+      - "3002"
     ports:
       - "127.0.0.1:3002:3002"
+    secrets:
+      - exporter_encryption_key
+      - vault_api_key
+      - vault_signing_secret
     environment:
       - TZ=Europe/Paris
-      - RUST_LOG=warn
+      - RUST_LOG={{ container_log_level }}
 {% if database_type == 'postgres_container' %}
       - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_container_name }}:5432/{{ postgres_db_name }}
 {% elif database_type == 'postgres_external' %}
@@ -195,20 +299,64 @@ services:
 {% else %}
       - DATABASE_URL=sqlite:///config/simply_ip_exporter.db?mode=rwc
 {% endif %}
-      - EXPORTER_ENCRYPTION_KEY={{ exporter_encryption_key }}
+      - EXPORTER_ENCRYPTION_KEY_FILE=/run/secrets/exporter_encryption_key
       - VAULT_BASE_URL={{ effective_vault_url }}
-      - VAULT_API_KEY={{ effective_vault_api_key }}
-      - VAULT_SIGNING_SECRET={{ effective_vault_signing_secret }}
+      - VAULT_API_KEY_FILE=/run/secrets/vault_api_key
+      - VAULT_SIGNING_SECRET_FILE=/run/secrets/vault_signing_secret
     volumes:
       - {{ compose_dir }}/config_simply_ip_exporter:/config:rw
       - /etc/localtime:/etc/localtime:ro
+    tmpfs:
+      - "/run:exec,mode=777"
+      - "/tmp:exec,mode=777"
+      - "/var/tmp:exec,mode=777"
     networks:
       - {{ docker_net_ext_name }}
       - {{ docker_net_isolate_name }}
 {% endif %}
 
+secrets:
+  fw_encryption_key:
+    file: {{ firewall_secrets_dir }}/fw_encryption_key.txt
+  hook_executor_signing_secret:
+    file: {{ firewall_secrets_dir }}/hook_executor_signing_secret.txt
+  hook_executor_api_key:
+    file: {{ firewall_secrets_dir }}/hook_executor_api_key.txt
+  vault_encryption_key:
+    file: {{ firewall_secrets_dir }}/vault_encryption_key.txt
+  sync_encryption_key:
+    file: {{ firewall_secrets_dir }}/sync_encryption_key.txt
+  exporter_encryption_key:
+    file: {{ firewall_secrets_dir }}/exporter_encryption_key.txt
+  vault_api_key:
+    file: {{ firewall_secrets_dir }}/vault_api_key.txt
+  vault_signing_secret:
+    file: {{ firewall_secrets_dir }}/vault_signing_secret.txt
+
 networks:
-  {{ docker_net_isolate_name }}:
-    external: true
   {{ docker_net_ext_name }}:
-    external: true
+    driver: bridge
+    name: {{ docker_net_ext_name }}
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: {{ docker_net_ext_ipv4_subnet }}
+        - subnet: {{ docker_net_ext_ipv6_subnet }}
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"
+      com.docker.network.bridge.name: "{{ docker_net_ext_name }}"
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+
+  {{ docker_net_isolate_name }}:
+    driver: bridge
+    name: {{ docker_net_isolate_name }}
+    enable_ipv6: true
+    #internal: true
+    ipam:
+      config:
+        - subnet: {{ docker_net_isolate_ipv4_subnet }}
+        - subnet: {{ docker_net_isolate_ipv6_subnet }}
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"
+      com.docker.network.bridge.name: "{{ docker_net_isolate_name }}"
+      com.docker.network.bridge.enable_ip_masquerade: "false"

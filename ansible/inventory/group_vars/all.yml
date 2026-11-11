@@ -69,7 +69,24 @@ docker_gateway_isolate_ip: "10.123.0.1"
 
 # Firewall Directory & System Locations
 firewall_dir: "/etc/firewall"
-compose_dir: "/srv/dockers/simply_firewall"
+compose_dir: "{{ firewall_dir }}"
+firewall_secrets_dir: "{{ firewall_dir }}/secrets"
+
+# Container User/Group Isolation
+user_fw_rules_manager: "1128:1128"
+user_hook_executor: "1127:1127"
+user_ip_vault: "1124:1124"
+user_ip_sync: "1126:1126"
+user_ip_exporter: "1125:1125"
+
+# SSH Exposure & Initial Bootstrap Firewall Policy
+# Options for ssh_access_mode: "whitelist_only" | "country_restricted" | "worldwide"
+ssh_access_mode: "whitelist_only"
+country_open_port_default: "FR"
+operator_whitelist_ips: []
+
+# Container Logging Level ("info" on bootstrap extraction, "warn" for standard operation)
+container_log_level: "warn"
 
 # Service & Database Selection
 # database_type options: "sqlite" | "postgres_container" | "postgres_external"
@@ -101,6 +118,7 @@ hook_executor_allow_ext_network: false
 # Container Images
 image_fw_rules_manager: "ghcr.io/studyfranco/simply_fw_rules_manager:master"
 image_hook_executor: "ghcr.io/studyfranco/simply_hook_executor:master"
+image_socket_proxy: "ghcr.io/wollomatic/socket-proxy:1"
 image_fail2ban: "lscr.io/linuxserver/fail2ban:latest"
 image_ip_vault: "ghcr.io/studyfranco/simply_ip_vault:master"
 image_ip_sync: "ghcr.io/studyfranco/simply_ip_sync:master"

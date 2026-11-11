@@ -15,6 +15,41 @@ pub const INITIAL_MASTER_KEY_ENV: &str = "INITIAL_MASTER_KEY";
 /// Environment variable for initial Master HMAC signing secret.
 pub const INITIAL_MASTER_SIGNING_SECRET_ENV: &str = "INITIAL_MASTER_SIGNING_SECRET";
 
+/// Reads a secret from an environment variable pointing to a file (`_FILE`),
+/// directly from `/run/secrets/<name>`, or from a direct environment variable.
+///
+/// Precedence:
+/// 1. `<VAR_NAME>_FILE` path content (if set, non-empty, and file exists)
+/// 2. `/run/secrets/<lowercase_var_name>` (if file exists)
+/// 3. `<VAR_NAME>` direct environment variable (if set and non-empty)
+#[must_use]
+pub fn get_secret_or_env(var_name: &str) -> Option<String> {
+    if let Ok(file_path) = std::env::var(format!("{var_name}_FILE")) {
+        let trimmed = file_path.trim();
+        if !trimmed.is_empty() {
+            if let Ok(content) = std::fs::read_to_string(trimmed) {
+                let trimmed_content = content.trim().to_owned();
+                if !trimmed_content.is_empty() {
+                    return Some(trimmed_content);
+                }
+            }
+        }
+    }
+
+    let default_path = format!("/run/secrets/{}", var_name.to_ascii_lowercase());
+    if let Ok(content) = std::fs::read_to_string(&default_path) {
+        let trimmed_content = content.trim().to_owned();
+        if !trimmed_content.is_empty() {
+            return Some(trimmed_content);
+        }
+    }
+
+    std::env::var(var_name)
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
 /// Returns maximum request body bytes from `MAX_BODY_SIZE_MIB` (default 10 MiB).
 #[must_use]
 pub fn max_body_bytes() -> usize {
@@ -177,5 +212,32 @@ mod tests {
         let trusted_peer = IpAddr::from_str("10.0.0.1").unwrap();
         let client = resolve_client_ip(trusted_peer, &headers, &trusted);
         assert_eq!(client, trusted_peer);
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn get_secret_or_env_reads_env_and_file() {
+        // Direct env
+        let test_var = "TEST_SECRET_DIRECT_VAL_123";
+        // SAFETY: Single-threaded unit test modifying an isolated environment variable key
+        unsafe { std::env::set_var(test_var, "direct_secret_value") };
+        assert_eq!(get_secret_or_env(test_var), Some("direct_secret_value".to_owned()));
+
+        // File-based env takes precedence
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("secret.txt");
+        std::fs::write(&file_path, "file_secret_value\n").unwrap();
+
+        let file_var = format!("{test_var}_FILE");
+        // SAFETY: Single-threaded unit test modifying an isolated environment variable key
+        unsafe { std::env::set_var(&file_var, file_path.display().to_string()) };
+        assert_eq!(get_secret_or_env(test_var), Some("file_secret_value".to_owned()));
+
+        // Cleanup
+        // SAFETY: Single-threaded unit test cleaning up isolated environment variables
+        unsafe {
+            std::env::remove_var(test_var);
+            std::env::remove_var(&file_var);
+        }
     }
 }

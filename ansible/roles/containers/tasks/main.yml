@@ -1,46 +1,81 @@
 ---
 # Tasks for role: containers
-# Deploys container configuration volumes, templates docker-compose.yml, and starts services
+# Deploys container configuration volumes, templates docker-compose.yml with Docker secrets,
+# deploys socket-proxy, and orchestrates first-boot master key extraction and log rotation.
 
-- name: Generate random security secrets for containers if not already defined
-  ansible.builtin.set_fact:
-    vault_encryption_key: "{{ vault_encryption_key | default(lookup('community.general.random_string', length=64, special=false, lower=true, upper=false) if false else raw_vault_key.stdout) }}"
-    hook_executor_signing_secret: "{{ hook_executor_signing_secret | default(raw_she_secret.stdout) }}"
-    hook_executor_api_key: "{{ hook_executor_api_key | default(raw_she_api_key.stdout) }}"
-    sync_encryption_key: "{{ sync_encryption_key | default(raw_sync_key.stdout) }}"
-    exporter_encryption_key: "{{ exporter_encryption_key | default(raw_exporter_key.stdout) }}"
-    postgres_password: "{{ postgres_password if (postgres_password is defined and postgres_password | length > 0) else raw_pg_pass.stdout }}"
-    hook_id_report: "{{ hook_id_report | default(raw_hook_report.stdout) }}"
-    hook_id_block: "{{ hook_id_block | default(raw_hook_block.stdout) }}"
-    hook_id_reload: "{{ hook_id_reload | default(raw_hook_reload.stdout) }}"
-  vars:
-    raw_vault_key: { stdout: "e1f2a3b4c5d6e7f809182736455463728190aabbccddeeff0011223344556677" }
-    raw_she_secret: { stdout: "f2a3b4c5d6e7f809182736455463728190aabbccddeeff001122334455667788" }
-    raw_she_api_key: { stdout: "a3b4c5d6e7f809182736455463728190aabbccddeeff00112233445566778899" }
-    raw_sync_key: { stdout: "b4c5d6e7f809182736455463728190aabbccddeeff00112233445566778899aa" }
-    raw_exporter_key: { stdout: "c5d6e7f809182736455463728190aabbccddeeff00112233445566778899aabb" }
-    raw_pg_pass: { stdout: "pg_sec_pass_2026" }
-    raw_hook_report: { stdout: "ad74378f-0c9f-4f1d-ba65-033476082ac7" }
-    raw_hook_block: { stdout: "bd84378f-0c9f-4f1d-ba65-033476082ac8" }
-    raw_hook_reload: { stdout: "cd94378f-0c9f-4f1d-ba65-033476082ac9" }
-
-- name: Create secure container configuration directories
+- name: Create secure container configuration directories in firewall directory
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: directory
     owner: "{{ item.owner | default('root') }}"
     group: "{{ item.group | default('root') }}"
-    mode: "{{ item.mode | default('0755') }}"
+    mode: "{{ item.mode | default('0700') }}"
   loop:
-    - { path: "{{ compose_dir }}", mode: "0755" }
-    - { path: "{{ compose_dir }}/config_simply_fw_rules_manager", mode: "0755" }
+    - { path: "{{ compose_dir }}", mode: "0700" }
+    - { path: "{{ firewall_secrets_dir }}", mode: "0700" }
+    - { path: "{{ compose_dir }}/config_simply_fw_rules_manager", owner: "1128", mode: "0700" }
     - { path: "{{ compose_dir }}/config_simply_hook_executor", owner: "1127", group: "1127", mode: "0700" }
     - { path: "{{ compose_dir }}/config_fail2ban", mode: "0755" }
     - { path: "{{ compose_dir }}/config_fail2ban/action.d", mode: "0755" }
-    - { path: "{{ compose_dir }}/config_simply_ip_vault", owner: "1124", group: "1124", mode: "0755" }
-    - { path: "{{ compose_dir }}/config_simply_ip_sync", owner: "1126", group: "1126", mode: "0755" }
-    - { path: "{{ compose_dir }}/config_simply_ip_exporter", owner: "1125", group: "1125", mode: "0755" }
+    - { path: "{{ compose_dir }}/config_simply_ip_vault", owner: "1124", group: "1124", mode: "0700" }
+    - { path: "{{ compose_dir }}/config_simply_ip_sync", owner: "1126", group: "1126", mode: "0700" }
+    - { path: "{{ compose_dir }}/config_simply_ip_exporter", owner: "1125", group: "1125", mode: "0700" }
     - { path: "{{ compose_dir }}/postgres_data", mode: "0700" }
+
+- name: Generate 32-byte hex Docker secrets idempotently if not already present
+  ansible.builtin.shell:
+    cmd: >
+      test -s '{{ firewall_secrets_dir }}/{{ item }}.txt' ||
+      openssl rand -hex 32 | tr -d '\n' > '{{ firewall_secrets_dir }}/{{ item }}.txt'
+  loop:
+    - fw_encryption_key
+    - sync_encryption_key
+    - vault_encryption_key
+    - exporter_encryption_key
+    - hook_executor_signing_secret
+    - hook_executor_api_key
+    - vault_api_key
+    - vault_signing_secret
+  changed_when: false
+
+- name: Ensure strict 0600 permissions on all secret files
+  ansible.builtin.file:
+    path: "{{ firewall_secrets_dir }}/{{ item }}.txt"
+    owner: root
+    group: root
+    mode: "0600"
+  loop:
+    - fw_encryption_key
+    - sync_encryption_key
+    - vault_encryption_key
+    - exporter_encryption_key
+    - hook_executor_signing_secret
+    - hook_executor_api_key
+    - vault_api_key
+    - vault_signing_secret
+
+- name: Ensure editable firewall files exist with proper container ownership
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: touch
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+    modification_time: preserve
+    access_time: preserve
+  loop:
+    - { path: "{{ firewall_dir }}/firewall.settings", owner: "1128", group: "root", mode: "0600" }
+    - { path: "{{ firewall_dir }}/firewall.rules.special", owner: "1128", group: "root", mode: "0700" }
+    - { path: "{{ firewall_dir }}/firewall.get.list", owner: "1128", group: "root", mode: "0700" }
+
+- name: Deploy firewall.tools script if missing
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts_etc/firewall.tools"
+    dest: "{{ firewall_dir }}/firewall.tools"
+    owner: root
+    group: root
+    mode: "0644"
+  ignore_errors: true
 
 - name: Copy hookexecutor private key for simply_hook_executor container
   ansible.builtin.copy:
@@ -67,14 +102,84 @@
     group: root
     mode: "0644"
 
-- name: Deploy docker-compose.yml
-  ansible.builtin.template:
-    src: docker-compose.yml.j2
-    dest: "{{ compose_dir }}/docker-compose.yml"
-    owner: root
-    group: root
-    mode: "0640"
+- name: Check if master_key file already exists
+  ansible.builtin.stat:
+    path: "{{ firewall_dir }}/master_key"
+  register: master_key_file_stat
 
-- name: Start or update Simply Firewall container stack
-  ansible.builtin.command:
-    cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --remove-orphans
+# ==============================================================================
+# First-Boot Workflow: Run with info, extract master keys to /etc/firewall/master_key,
+# then recreate containers with warn to purge secrets from log history.
+# ==============================================================================
+- name: First-boot orchestration of Master Keys
+  when: not master_key_file_stat.stat.exists
+  block:
+    - name: Deploy docker-compose.yml configured with container_log_level=info
+      ansible.builtin.template:
+        src: docker-compose.yml.j2
+        dest: "{{ compose_dir }}/docker-compose.yml"
+        owner: root
+        group: root
+        mode: "0640"
+      vars:
+        container_log_level: "info"
+
+    - name: Start container stack in bootstrap mode
+      ansible.builtin.command:
+        cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --remove-orphans
+
+    - name: Wait for services to initialize database schemas and generate master credentials
+      ansible.builtin.pause:
+        seconds: 8
+
+    - name: Extract generated Master API credentials from container logs
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          OUTPUT_FILE="{{ firewall_dir }}/master_key"
+          rm -f "${OUTPUT_FILE}"
+          touch "${OUTPUT_FILE}"
+          chmod 0600 "${OUTPUT_FILE}"
+
+          for svc in simply_fw_rules_manager simply_hook_executor simply_ip_vault simply_ip_sync simply_ip_exporter; do
+            if docker compose -f {{ compose_dir }}/docker-compose.yml ps --services | grep -q "^${svc}$"; then
+              echo "=== [${svc}] ===" >> "${OUTPUT_FILE}"
+              docker logs "${svc}" 2>&1 | grep -E "^\s*║\s*(X-API-Key|Signing secret)" | sed 's/^[[:space:]]*║[[:space:]]*//' | sed 's/[[:space:]]*║[[:space:]]*$//' >> "${OUTPUT_FILE}" || true
+              echo "" >> "${OUTPUT_FILE}"
+            fi
+          done
+      changed_when: true
+
+    - name: Deploy final docker-compose.yml with container_log_level=warn
+      ansible.builtin.template:
+        src: docker-compose.yml.j2
+        dest: "{{ compose_dir }}/docker-compose.yml"
+        owner: root
+        group: root
+        mode: "0640"
+      vars:
+        container_log_level: "warn"
+
+    - name: Recreate container stack with warn logging (naturally purging bootstrap log history)
+      ansible.builtin.command:
+        cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --remove-orphans
+
+# ==============================================================================
+# Routine Deploy / Update Workflow (master_key already exists)
+# ==============================================================================
+- name: Routine deployment of docker-compose.yml
+  when: master_key_file_stat.stat.exists
+  block:
+    - name: Deploy docker-compose.yml
+      ansible.builtin.template:
+        src: docker-compose.yml.j2
+        dest: "{{ compose_dir }}/docker-compose.yml"
+        owner: root
+        group: root
+        mode: "0640"
+      vars:
+        container_log_level: "warn"
+
+    - name: Start or update Simply Firewall container stack
+      ansible.builtin.command:
+        cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --remove-orphans

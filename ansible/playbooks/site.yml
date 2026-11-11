@@ -46,6 +46,21 @@
       default: "no"
       private: false
 
+    - name: input_ssh_access_mode
+      prompt: "SSH firewall access mode ('whitelist_only', 'country_restricted', 'worldwide') [press Enter for 'whitelist_only']"
+      default: "whitelist_only"
+      private: false
+
+    - name: input_country_open_port
+      prompt: "Allowed ISO countries for GeoIP filtering if country_restricted [press Enter for 'FR']"
+      default: "FR"
+      private: false
+
+    - name: input_operator_whitelist_ips
+      prompt: "Operator administration IPs to whitelist (comma-separated, e.g. 1.2.3.4,2001:db8::1) [leave empty if none]"
+      default: ""
+      private: false
+
   pre_tasks:
     - name: Apply interactive prompts if variables are not already passed via CLI or inventory
       ansible.builtin.set_fact:
@@ -56,6 +71,14 @@
         remote_vault_url: "{{ remote_vault_url | default(input_remote_vault_url) }}"
         deploy_simply_ip_sync: "{{ deploy_simply_ip_sync | default(input_deploy_sync | bool) }}"
         deploy_simply_ip_exporter: "{{ deploy_simply_ip_exporter | default(input_deploy_exporter | bool) }}"
+        ssh_access_mode: "{{ ssh_access_mode | default(input_ssh_access_mode) }}"
+        country_open_port_default: "{{ country_open_port_default | default(input_country_open_port) }}"
+        operator_whitelist_ips: >-
+          {{
+            operator_whitelist_ips
+            if (operator_whitelist_ips is defined and operator_whitelist_ips | length > 0)
+            else (input_operator_whitelist_ips.split(',') | map('trim') | reject('eq', '') | list if input_operator_whitelist_ips | length > 0 else [])
+          }}
 
   roles:
     - role: common

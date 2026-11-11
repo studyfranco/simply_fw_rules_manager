@@ -322,12 +322,15 @@ exit 0
     out
 }
 
-/// Atomically writes `firewall.settings`, `firewall.rules.special`, and `firewall.get.list` to
-/// `bundle.output_dir` with mode `0700`.
+/// Writes `firewall.settings`, `firewall.rules.special`, and `firewall.get.list` directly to
+/// `bundle.output_dir` with mode `0700`. Direct truncation and writing is used to support
+/// Docker bind-mounted files without failing with `EBUSY` on filesystem rename.
 ///
 /// # Errors
-/// Returns [`AppError`] if the target directory cannot be created or written.
+/// Returns [`AppError`] if the target directory or files cannot be opened or written.
 pub fn write_bundle_to_disk(bundle: &GeneratedFilesBundle) -> Result<Vec<String>, AppError> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
 
     let dir = Path::new(&bundle.output_dir);
@@ -344,15 +347,22 @@ pub fn write_bundle_to_disk(bundle: &GeneratedFilesBundle) -> Result<Vec<String>
     let mut written = Vec::new();
     for (filename, content) in files {
         let final_path = dir.join(filename);
-        let tmp_path = dir.join(format!(".{filename}.tmp.{}", uuid::Uuid::new_v4()));
-        std::fs::write(&tmp_path, content.as_bytes()).map_err(|e| {
-            AppError::InvalidInput(format!("Failed writing {}: {e}", tmp_path.display()))
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&final_path)
+            .map_err(|e| {
+                AppError::InvalidInput(format!("Failed opening {}: {e}", final_path.display()))
+            })?;
+        file.write_all(content.as_bytes()).map_err(|e| {
+            AppError::InvalidInput(format!("Failed writing {}: {e}", final_path.display()))
+        })?;
+        file.flush().map_err(|e| {
+            AppError::InvalidInput(format!("Failed flushing {}: {e}", final_path.display()))
         })?;
         let perms = std::fs::Permissions::from_mode(0o700);
-        let _ = std::fs::set_permissions(&tmp_path, perms);
-        std::fs::rename(&tmp_path, &final_path).map_err(|e| {
-            AppError::InvalidInput(format!("Failed renaming to {}: {e}", final_path.display()))
-        })?;
+        let _ = std::fs::set_permissions(&final_path, perms);
         written.push(final_path.display().to_string());
     }
     Ok(written)

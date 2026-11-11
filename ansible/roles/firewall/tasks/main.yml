@@ -30,7 +30,7 @@
   ansible.builtin.template:
     src: firewall.settings.j2
     dest: "{{ firewall_dir }}/firewall.settings"
-    owner: root
+    owner: "1128"
     group: root
     mode: "0600"
     force: false # Preserve existing configuration if already customized
@@ -39,7 +39,16 @@
   ansible.builtin.template:
     src: firewall.rules.special.j2
     dest: "{{ firewall_dir }}/firewall.rules.special"
-    owner: root
+    owner: "1128"
+    group: root
+    mode: "0700"
+    force: false
+
+- name: Deploy initial firewall.get.list configuration
+  ansible.builtin.template:
+    src: firewall.get.list.j2
+    dest: "{{ firewall_dir }}/firewall.get.list"
+    owner: "1128"
     group: root
     mode: "0700"
     force: false

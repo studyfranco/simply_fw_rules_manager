@@ -96,18 +96,12 @@ pub async fn ensure_master_key(
         return Ok(existing.id);
     }
 
-    let raw_key = std::env::var(crate::config::INITIAL_MASTER_KEY_ENV)
-        .or_else(|_| std::env::var("MASTER_API_KEY"))
-        .ok()
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
+    let raw_key = crate::config::get_secret_or_env(crate::config::INITIAL_MASTER_KEY_ENV)
+        .or_else(|| crate::config::get_secret_or_env("MASTER_API_KEY"))
         .unwrap_or_else(generate_signing_secret);
 
-    let raw_secret = std::env::var(crate::config::INITIAL_MASTER_SIGNING_SECRET_ENV)
-        .or_else(|_| std::env::var("MASTER_SIGNING_SECRET"))
-        .ok()
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
+    let raw_secret = crate::config::get_secret_or_env(crate::config::INITIAL_MASTER_SIGNING_SECRET_ENV)
+        .or_else(|| crate::config::get_secret_or_env("MASTER_SIGNING_SECRET"))
         .unwrap_or_else(generate_signing_secret);
 
     let mut hasher = Sha256::new();
@@ -139,8 +133,29 @@ pub async fn ensure_master_key(
     };
     model.insert(db).await?;
 
-    tracing::warn!(
-        "Bootstrapped initial Master API Key (id={id}): API_KEY={raw_key} SIGNING_SECRET={raw_secret}"
+    const W: usize = 82;
+    let border = "═".repeat(W);
+    let bound_ip = "ALL (Unrestricted)";
+    let body: String = [
+        format!("X-API-Key      : {raw_key}"),
+        format!("Signing secret : {raw_secret}"),
+        format!("Bound IPs      : {bound_ip}"),
+        String::new(),
+        "Both values are needed to sign requests (X-Timestamp + X-Signature-256).".to_owned(),
+        "They will NOT be shown again — store them securely!".to_owned(),
+    ]
+    .iter()
+    .map(|row| format!("║ {row:<W$} ║\n"))
+    .collect();
+
+    tracing::info!(
+        "\n╔{border}╗\n║ {:<W$} ║\n╠{border}╣\n{body}╚{border}╝",
+        "BOOTSTRAP: Master API Key Generated"
     );
+
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+    std::io::stderr().flush().ok();
+
     Ok(id)
 }

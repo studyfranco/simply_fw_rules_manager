@@ -122,9 +122,14 @@ pub async fn import_from_directory(
         docker_endpoint: Set(docker_endpoint),
         output_dir: Set(output_dir),
         tools_script_path: Set(tools_path),
-        hook_executor_url: Set(std::env::var("HOOK_EXECUTOR_URL").ok()),
-        hook_executor_api_key: Set(std::env::var("HOOK_EXECUTOR_API_KEY").ok()),
-        hook_executor_signing_secret: Set(None),
+        hook_executor_url: Set(crate::config::get_secret_or_env("HOOK_EXECUTOR_URL")),
+        hook_executor_api_key: Set(crate::config::get_secret_or_env("HOOK_EXECUTOR_API_KEY")),
+        hook_executor_signing_secret: Set({
+            let cipher = crate::crypto::SecretCipher::from_env()
+                .unwrap_or(crate::crypto::SecretCipher::Plaintext);
+            crate::config::get_secret_or_env("HOOK_EXECUTOR_SIGNING_SECRET")
+                .and_then(|raw| cipher.seal(&raw).ok())
+        }),
         hook_reload_name: Set("firewall-reload".to_owned()),
         hook_update_containers_name: Set("docker-update-containers".to_owned()),
         updated_at: Set(now),
