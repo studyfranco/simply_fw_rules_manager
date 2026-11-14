@@ -571,7 +571,7 @@ async function renderSettingsTab() {
       <div class="list-header">
         <h2>Règles d'Ouverture par Zone (<code>ip_autor</code>, <code>internal</code>, <code>local</code>, <code>open</code>, <code>ww</code>)</h2>
         <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-          <input type="text" id="zone-search-input" class="input-field" style="width:220px;" placeholder="Filtrer port, conteneur, note..." value="${escapeHtml(window._zoneSearchQuery || "")}">
+          <input type="text" id="zone-search-input" class="input-field" style="width:270px;" placeholder="Filtrer port, conteneur, note..." value="${escapeHtml(window._zoneSearchQuery || "")}">
           <select id="zone-filter-select" class="input-field" style="width:auto;">
             <option value="">Toutes les zones (${zoneRules.length})</option>
             <option value="ip_autor" ${zoneFilterState === "ip_autor" ? "selected" : ""}>ip_autor (Trusted IPs)</option>
@@ -724,7 +724,7 @@ function renderZoneRuleRow(r, canEdit) {
 function showZoneRuleForm(existing) {
   const slot = document.getElementById("zone-rule-form-slot");
   slot.innerHTML = `
-    <form id="zone-rule-editor-form" class="card" style="margin-bottom:1rem;background:var(--bg-input);">
+    <form id="zone-rule-editor-form" class="card" style="margin-bottom:1rem;background:#383e45;border-color:#565b63;box-shadow:var(--shadow);">
       <h3>${existing ? "Modifier la Règle de Zone" : "Nouvelle Règle de Zone"}</h3>
       <div class="grid-2" style="margin-top:0.75rem;">
         <div class="form-group">
@@ -758,19 +758,19 @@ function showZoneRuleForm(existing) {
           <small class="field-hint">Format Docker: <code>port_ext,réseau,conteneur,port_conteneur</code> | Port hôte: <code>80</code> | Redirect: <code>80,8080</code> | DNAT: <code>80,iface,ipv4,ipv6,8080</code></small>
         </div>
         <div class="form-group">
+          <label for="zr-comment">Commentaire (optionnel)</label>
+          <input type="text" id="zr-comment" class="input-field" value="${escapeHtml(existing?.comment || "")}">
+        </div>
+        <div class="form-group" style="grid-column: 1 / -1;">
           <label>Assistant rapide règle Docker (remplit automatiquement la valeur)</label>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:0.35rem;">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0.6rem;">
             <input type="text" id="zr-helper-extport" class="input-field font-mono" placeholder="Port ext (443)">
             <input type="text" id="zr-helper-net" list="dl-networks" class="input-field font-mono" placeholder="Réseau (ext)">
             <input type="text" id="zr-helper-container" list="dl-containers" class="input-field font-mono" placeholder="Conteneur">
             <input type="text" id="zr-helper-cport" class="input-field font-mono" placeholder="Port cible">
           </div>
         </div>
-        <div class="form-group">
-          <label for="zr-comment">Commentaire (optionnel)</label>
-          <input type="text" id="zr-comment" class="input-field" value="${escapeHtml(existing?.comment || "")}">
-        </div>
-        <div class="form-group" style="display:flex;align-items:center;gap:1rem;padding-top:1.5rem;">
+        <div class="form-group" style="grid-column: 1 / -1;display:flex;align-items:center;gap:1rem;">
           <label><input type="checkbox" id="zr-enabled" ${!existing || existing.enabled ? "checked" : ""}> Règle activée</label>
           <label for="zr-order">Ordre:</label>
           <input type="number" id="zr-order" class="input-field font-mono" style="width:90px;" value="${existing ? existing.sort_order : 100}">
@@ -873,7 +873,7 @@ async function renderDockerTab() {
       <div class="list-header">
         <h2>Flux Inter-Conteneurs (<code>dockerAccessBetweenThem</code>)</h2>
         <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-          <input type="text" id="docker-rule-search" class="input-field" style="width:220px;" placeholder="Filtrer conteneur, port, réseau..." value="${escapeHtml(window._dockerSearchQuery || "")}">
+          <input type="text" id="docker-rule-search" class="input-field" style="width:270px;" placeholder="Filtrer conteneur, port, réseau..." value="${escapeHtml(window._dockerSearchQuery || "")}">
           ${canEdit ? `<button type="button" id="btn-new-docker-rule" class="btn btn-primary">+ Nouveau Flux Inter-Conteneurs</button>` : ""}
         </div>
       </div>
@@ -1047,7 +1047,7 @@ async function renderDockerTab() {
 function showDockerRuleForm(existing) {
   const slot = document.getElementById("docker-rule-form-slot");
   slot.innerHTML = `
-    <form id="docker-rule-editor-form" class="card" style="margin-bottom:1rem;background:var(--bg-input);">
+    <form id="docker-rule-editor-form" class="card" style="margin-bottom:1rem;background:#383e45;border-color:#565b63;box-shadow:var(--shadow);">
       <h3>${existing ? "Modifier le Flux Inter-Conteneurs" : "Nouveau Flux Inter-Conteneurs"}</h3>
       <div class="grid-2" style="margin-top:0.75rem;">
         <div class="form-group">
@@ -1271,7 +1271,7 @@ async function renderBlocklistsTab() {
       <div class="list-header">
         <h2>Listes de Blocage IP (<code>firewall.get.list</code>)</h2>
         <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
-          <input type="text" id="blocklist-search" class="input-field" style="width:220px;" placeholder="Filtrer nom, URL..." value="${escapeHtml(window._blocklistSearchQuery || "")}">
+          <input type="text" id="blocklist-search" class="input-field" style="width:270px;" placeholder="Filtrer nom, URL..." value="${escapeHtml(window._blocklistSearchQuery || "")}">
           ${canEdit ? `<button type="button" id="btn-new-blocklist" class="btn btn-primary">+ Ajouter une Liste d'IPs</button>` : ""}
         </div>
       </div>
@@ -1409,7 +1409,7 @@ async function renderBlocklistsTab() {
 function showBlocklistForm(existing) {
   const slot = document.getElementById("blocklist-form-slot");
   slot.innerHTML = `
-    <form id="blocklist-editor-form" class="card" style="margin-bottom:1rem;background:var(--bg-input);">
+    <form id="blocklist-editor-form" class="card" style="margin-bottom:1rem;background:#383e45;border-color:#565b63;box-shadow:var(--shadow);">
       <h3>${existing ? "Modifier la Blocklist" : "Nouvelle Blocklist"}</h3>
       <div class="grid-2" style="margin-top:0.75rem;">
         <div class="form-group">
@@ -1759,7 +1759,7 @@ function keyScopes(k) {
     (k.is_master || k.can_deploy_and_reload) && "can_deploy_and_reload",
   ]
     .filter(Boolean)
-    .map((s) => `<span class="badge badge-scope">${escapeHtml(s)}</span>`)
+    .map((s) => `<span class="badge badge-scope${s === "Master" ? " badge-scope-master" : ""}">${escapeHtml(s)}</span>`)
     .join("");
   return scopes ? `<div class="scope-badges">${scopes}</div>` : '<span class="text-muted text-sm">none</span>';
 }
