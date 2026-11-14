@@ -250,55 +250,16 @@ pub async fn build_files_bundle(
     })
 }
 
-/// Renders `firewall.get.list` keeping `generate_list()` and the final `.4`/`.6` aggregation intact.
+/// Renders `firewall.get.list` invoking `generate_list` and `finalize_blocklists` from `firewall.tools`.
 #[must_use]
 pub fn render_get_list(blocklists: &[fw_blocklist::Model]) -> String {
     let mut out = String::from(
-        r#"#!/bin/bash
+        r"#!/bin/bash
 
 source /etc/firewall/firewall.settings
 source /etc/firewall/firewall.tools
 
-generate_list()
-{
-	local TARGET
-	local URL=$1
-	local begin_file=$2
-
-	local tmp_4="/etc/firewall/${begin_file}.ip.4.tmp"
-	local tmp_6="/etc/firewall/${begin_file}.ip.6.tmp"
-	local final_4="/etc/firewall/${begin_file}.ip.4"
-	local final_6="/etc/firewall/${begin_file}.ip.6"
-
-	: > "${tmp_4}"
-	: > "${tmp_6}"
-	for TARGET in $(curl ${URL} 2>/dev/null | grep -v "^#" | cut -d " " -f 1); do
-		if is_ipv4 "${TARGET}"; then
-			echo "${TARGET}" >> ${tmp_4}
-		elif is_ipv4_net "${TARGET}"; then
-			echo "${TARGET}" >> ${tmp_4}
-		elif is_ipv6 "${TARGET}"; then
-			echo "${TARGET}" >> "${tmp_6}"
-		elif is_ipv6_net "${TARGET}"; then
-			echo "${TARGET}" >> "${tmp_6}"
-		fi
-	done
-
-	if [ -s "${tmp_4}" ]; then
-        mv "${tmp_4}" "${final_4}"
-    else
-        rm -f "${tmp_4}"
-    fi
-
-    if [ -s "${tmp_6}" ]; then
-        mv "${tmp_6}" "${final_6}"
-    else
-        rm -f "${tmp_6}"
-    fi
-
-}
-
-"#,
+",
     );
 
     for bl in blocklists {
@@ -311,10 +272,7 @@ generate_list()
 
     out.push_str(
         r"
-wait
-
-cat /etc/firewall/*.6 > /etc/firewall/to_block.ipv6
-cat /etc/firewall/*.4 > /etc/firewall/to_block.ipv4
+finalize_blocklists
 
 exit 0
 ",

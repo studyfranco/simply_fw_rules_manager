@@ -61,6 +61,11 @@
       default: ""
       private: false
 
+    - name: input_abuseipdb_api_key
+      prompt: "AbuseIPDB API Key for automated Vault reporting & Sync feed [leave empty to skip]"
+      default: ""
+      private: true
+
   pre_tasks:
     - name: Apply interactive prompts if variables are not already passed via CLI or inventory
       ansible.builtin.set_fact:
@@ -73,6 +78,7 @@
         deploy_simply_ip_exporter: "{{ deploy_simply_ip_exporter | default(input_deploy_exporter | bool) }}"
         ssh_access_mode: "{{ ssh_access_mode | default(input_ssh_access_mode) }}"
         country_open_port_default: "{{ country_open_port_default | default(input_country_open_port) }}"
+        abuseipdb_api_key: "{{ abuseipdb_api_key if (abuseipdb_api_key is defined and abuseipdb_api_key | length > 0) else input_abuseipdb_api_key }}"
         operator_whitelist_ips: >-
           {{
             operator_whitelist_ips

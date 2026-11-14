@@ -36,13 +36,10 @@ call() {
         "${URL_API}${path}"
 }
 
-if ! ip addr show | grep -wq "${TARGET}"; then
-    if is_ipv4 "${TARGET}"; then
+if ! ip addr show | grep -wq "${TARGET%/*}"; then
+    if is_ipv4 "${TARGET}" || is_ipv6 "${TARGET}" || is_ipv4_net "${TARGET}" || is_ipv6_net "${TARGET}"; then
         call POST /api/ban \
             "{\"target_address\": \"${TARGET}\", \"group_name\": \"${GROUP_NAME}\", \"cause\": \"${CAUSE}\"}"
-    elif is_ipv6 "${TARGET}"; then
-        call POST /api/ban \
-            "{\"target_address\": \"${TARGET}/48\", \"group_name\": \"${GROUP_NAME}\", \"cause\": \"${CAUSE}\"}"
     fi
 fi
 

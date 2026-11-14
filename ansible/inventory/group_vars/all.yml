@@ -107,6 +107,7 @@ postgres_external_port: 5432
 vault_mode: "local"
 deploy_simply_ip_vault: true
 vault_group_name: "Main_Ban"
+vault_normalize_ipv6_to_48: true
 remote_vault_url: "https://vault.example.com"
 remote_vault_api_key: ""
 remote_vault_signing_secret: ""
@@ -114,6 +115,86 @@ remote_vault_signing_secret: ""
 # Optional Ecosystem Components
 deploy_simply_ip_sync: false
 deploy_simply_ip_exporter: false
+
+# AbuseIPDB Integration (Optional: leave abuseipdb_api_key empty to skip)
+# - Configures AbuseIPDB Report webhook on simply_ip_vault for vault_group_name (IP_ADD,IP_UPDATE)
+# - Configures abuseipdb JSON_PATH feed in simply_ip_sync (when deploy_simply_ip_sync is true)
+abuseipdb_api_key: ""
+abuseipdb_report_categories: "14,18"
+abuseipdb_confidence_minimum: 90
+
+# Default simply_ip_sync Destination Groups & Feeds (Replicated from Serv1 reference)
+sync_default_destination_groups:
+  - name: "Problematics IPS"
+    target_group_name: "external_banlist"
+    cron_schedule: "0 1 * * *"
+    mode: "upsert"
+    skip_bogon_filtering: false
+    feeds:
+      - name: "mass_scanner"
+        source_url: "https://raw.githubusercontent.com/stamparm/maltrail/refs/heads/master/data/mass_scanner.txt"
+        parser_type: "REGEX_LINE"
+      - name: "voipbl"
+        source_url: "https://www.voipbl.org/update/"
+        parser_type: "REGEX_LINE"
+      - name: "bitwire"
+        source_url: "https://raw.githubusercontent.com/bitwire-it/ipblocklist/refs/heads/main/inbound.txt"
+        parser_type: "REGEX_LINE"
+      - name: "stopforumspam"
+        source_url: "https://www.stopforumspam.com/downloads/bannedips.zip"
+        parser_type: "REGEX_LINE"
+      - name: "SFS_Toxic"
+        source_url: "https://www.stopforumspam.com/downloads/toxic_ip_cidr.txt"
+        parser_type: "REGEX_LINE"
+      - name: "myip_blacklist"
+        source_url: "https://myip.ms/files/blacklist/csf/latest_blacklist.txt"
+        parser_type: "REGEX_LINE"
+      - name: "emergin"
+        source_url: "https://rules.emergingthreats.net/blockrules/compromised-ips.txt"
+        parser_type: "REGEX_LINE"
+      - name: "blocklistde"
+        source_url: "https://lists.blocklist.de/lists/all.txt"
+        parser_type: "REGEX_LINE"
+      - name: "greensnow"
+        source_url: "https://blocklist.greensnow.co/greensnow.txt"
+        parser_type: "REGEX_LINE"
+      - name: "DangerRulez"
+        source_url: "https://danger.rulez.sk/projects/bruteforceblocker/blist.php"
+        parser_type: "REGEX_LINE"
+      - name: "cinsarmy"
+        source_url: "https://cinsarmy.com/list/ci-badguys.txt"
+        parser_type: "REGEX_LINE"
+      - name: "spamhaus_v6"
+        source_url: "https://www.spamhaus.org/drop/dropv6.txt"
+        parser_type: "REGEX_LINE"
+      - name: "spamhaus_v4"
+        source_url: "https://www.spamhaus.org/drop/drop.txt"
+        parser_type: "REGEX_LINE"
+      - name: "emerginIps"
+        source_url: "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt"
+        parser_type: "REGEX_LINE"
+
+  - name: "VPN"
+    target_group_name: "vpn"
+    cron_schedule: "30 3 * * *"
+    mode: "upsert"
+    skip_bogon_filtering: false
+    feeds:
+      - name: "X4BNet_V4"
+        source_url: "https://raw.githubusercontent.com/X4BNet/lists_vpn/refs/heads/main/output/vpn/ipv4.txt"
+        parser_type: "REGEX_LINE"
+      - name: "torlist"
+        source_url: "https://www.dan.me.uk/torlist/?full"
+        parser_type: "REGEX_LINE"
+      - name: "X4BNet_V6"
+        source_url: "https://raw.githubusercontent.com/X4BNet/lists_vpn/refs/heads/main/output/vpn/ipv6.txt"
+        parser_type: "REGEX_LINE"
+      - name: "NazgulCoder_V4"
+        source_url: "https://raw.githubusercontent.com/NazgulCoder/IPLists/refs/heads/main/output/vpn-ipv4.txt"
+        parser_type: "REGEX_LINE"
+      - name: "NazgulCoder_V6"
+        source_url: "https://raw.githubusercontent.com/NazgulCoder/IPLists/refs/heads/main/output/vpn-ipv6.txt"
+        parser_type: "REGEX_LINE"
 
 # Hook Executor Network Exposure
 hook_executor_allow_ext_network: false

@@ -2,5 +2,12 @@
 # Synthetic reference blocklist feeds for testing and bootstrap seeding.
 # Contains NO API keys, tokens, or production endpoints.
 
-generate_list "https://example.org/blocklists/sample_threats.txt" "sample_threats"
-# generate_list "https://example.org/blocklists/disabled_feed.txt" "disabled_feed"
+source /etc/firewall/firewall.settings
+source /etc/firewall/firewall.tools
+
+generate_list "https://example.org/blocklists/sample_threats.txt" "sample_threats" &
+# generate_list "https://example.org/blocklists/disabled_feed.txt" "disabled_feed" &
+
+finalize_blocklists
+
+exit 0

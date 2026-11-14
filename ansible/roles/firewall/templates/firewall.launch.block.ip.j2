@@ -28,15 +28,17 @@ if command -v fail2ban-client >/dev/null 2>&1; then
     /usr/bin/fail2ban-client set recidive unbanip "${TARGET}" 2>/dev/null &
 fi
 
-if is_ipv4 "${TARGET}"; then
-    if ! ip addr show | grep -wq "${TARGET}"; then
-        $ROUTE add -host "${TARGET}" reject 2>/dev/null
+if is_ipv4 "${TARGET}" || is_ipv4_net "${TARGET}"; then
+    if ! ip addr show | grep -wq "${TARGET%/*}"; then
+        if is_ipv4 "${TARGET}"; then
+            $ROUTE add -host "${TARGET}" reject 2>/dev/null
+            $DUMPCO -k src "${TARGET}" >/dev/null 2>&1 &
+            $DUMPCO -k dst "${TARGET}" >/dev/null 2>&1 &
+            $ROUTE -n del "${TARGET}" reject 2>/dev/null
+        fi
         $IPS add "$IPSLISTBADIP" "${TARGET}" -exist 2>/dev/null &
         /bin/echo "${TARGET}" | tee -a {{ firewall_dir }}/firewall.block.ip >/dev/null &
-        $DUMPCO -k src "${TARGET}" >/dev/null 2>&1 &
-        $DUMPCO -k dst "${TARGET}" >/dev/null 2>&1 &
     fi
-    $ROUTE -n del "${TARGET}" reject 2>/dev/null
 elif is_ipv6 "${TARGET}"; then
     if ! ip addr show | grep -wq "${TARGET}"; then
         $ROUTE -6 add -host "${TARGET}" reject 2>/dev/null
@@ -46,6 +48,11 @@ elif is_ipv6 "${TARGET}"; then
         $DUMPCO -6 -k dst "${TARGET}" >/dev/null 2>&1 &
     fi
     $ROUTE -6 -n del "${TARGET}" reject 2>/dev/null
+elif is_ipv6_net "${TARGET}"; then
+    if ! ip addr show | grep -wq "${TARGET%/*}"; then
+        $IPS add "${IPSLISTBADIP}6" "${TARGET}" -exist 2>/dev/null &
+        /bin/echo "${TARGET}" | tee -a {{ firewall_dir }}/firewall.block.ip6 >/dev/null &
+    fi
 fi
 
 if [ -f "${hosts_deny_file}" ]; then

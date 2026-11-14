@@ -22,7 +22,7 @@ if command -v cscli >/dev/null 2>&1; then
     cscli hub update >/dev/null 2>&1 &
 fi
 
-rm -f {{ firewall_dir }}/*.tmp {{ firewall_dir }}/*.ip.4 {{ firewall_dir }}/*.ip.6 {{ firewall_dir }}/*.white.4 {{ firewall_dir }}/*.white.6
+rm -f {{ firewall_dir }}/*.tmp
 
 wait
 exit 0

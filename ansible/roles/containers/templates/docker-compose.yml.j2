@@ -211,6 +211,7 @@ services:
       - DATABASE_URL=sqlite:///config/simply_ip_vault.db?mode=rwc
 {% endif %}
       - ALLOW_PRIVATE_WEBHOOKS=true
+      - NORMALIZE_IPV6_TO_48={{ vault_normalize_ipv6_to_48 | default(true) | ternary('true', 'false') }}
       - VAULT_ENCRYPTION_KEY_FILE=/run/secrets/vault_encryption_key
     volumes:
       - {{ compose_dir }}/config_simply_ip_vault:/config:rw

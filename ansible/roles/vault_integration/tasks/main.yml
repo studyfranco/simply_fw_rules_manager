@@ -1,12 +1,53 @@
 ---
 # Tasks for role: vault_integration
-# Configures simply_ip_vault groups, webhooks, and connects simply_hook_executor SSH targets and hooks
+# Configures simply_ip_vault groups, AbuseIPDB reporting webhook, simply_ip_sync feeds,
+# and connects simply_hook_executor SSH targets and hooks.
 
-- name: Determine effective vault URL and credentials
+- name: Read extracted local Master credentials from {{ firewall_dir }}/master_key if present
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      FILE="{{ firewall_dir }}/master_key"
+      if [ ! -f "$FILE" ]; then
+        echo "{}"
+        exit 0
+      fi
+      extract_key() {
+        local svc="$1" field="$2"
+        awk -v s="=== [${svc}] ===" '$0 == s {flag=1; next} /^=== \[/ {flag=0} flag && $0 ~ field {sub(/^[^:]+:[[:space:]]*/, ""); print; exit}' "$FILE"
+      }
+      jq -n \
+        --arg vault_key "$(extract_key simply_ip_vault 'X-API-Key')" \
+        --arg vault_sec "$(extract_key simply_ip_vault 'Signing secret')" \
+        --arg sync_key "$(extract_key simply_ip_sync 'X-API-Key')" \
+        --arg sync_sec "$(extract_key simply_ip_sync 'Signing secret')" \
+        '{vault_key: $vault_key, vault_sec: $vault_sec, sync_key: $sync_key, sync_sec: $sync_sec}'
+  register: extracted_master_creds_raw
+  changed_when: false
+
+- name: Parse extracted Master credentials
+  ansible.builtin.set_fact:
+    extracted_master_creds: "{{ extracted_master_creds_raw.stdout | default('{}') | from_json }}"
+
+- name: Determine effective vault and sync URLs and credentials
   ansible.builtin.set_fact:
     effective_vault_url: "{{ 'http://simply_ip_vault:3000' if (vault_mode == 'local') else remote_vault_url }}"
-    effective_vault_api_key: "{{ remote_vault_api_key if (vault_mode == 'remote') else hostvars[inventory_hostname].local_vault_api_key | default('auto_local_vault_key_2026') }}"
-    effective_vault_signing_secret: "{{ remote_vault_signing_secret if (vault_mode == 'remote') else hostvars[inventory_hostname].local_vault_signing_secret | default('auto_local_vault_secret_2026') }}"
+    effective_vault_host_url: "{{ 'http://127.0.0.1:3000' if (vault_mode == 'local') else remote_vault_url }}"
+    effective_vault_api_key: >-
+      {{
+        remote_vault_api_key
+        if (vault_mode == 'remote')
+        else (hostvars[inventory_hostname].local_vault_api_key | default(extracted_master_creds.vault_key, true) | default('auto_local_vault_key_2026', true))
+      }}
+    effective_vault_signing_secret: >-
+      {{
+        remote_vault_signing_secret
+        if (vault_mode == 'remote')
+        else (hostvars[inventory_hostname].local_vault_signing_secret | default(extracted_master_creds.vault_sec, true) | default('auto_local_vault_secret_2026', true))
+      }}
+    effective_sync_host_url: "http://127.0.0.1:3003"
+    effective_sync_api_key: "{{ hostvars[inventory_hostname].local_sync_api_key | default(extracted_master_creds.sync_key, true) | default('', true) }}"
+    effective_sync_signing_secret: "{{ hostvars[inventory_hostname].local_sync_signing_secret | default(extracted_master_creds.sync_sec, true) | default('', true) }}"
 
 - name: Wait for simply_hook_executor to be responsive
   ansible.builtin.uri:
@@ -19,12 +60,202 @@
   delay: 3
   ignore_errors: true
 
+- name: Ensure target ban group and optional AbuseIPDB Report webhook exist on simply_ip_vault
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      VAULT_URL="{{ effective_vault_host_url }}"
+      API_KEY="{{ effective_vault_api_key }}"
+      SECRET="{{ effective_vault_signing_secret }}"
+      GROUP_NAME="{{ vault_group_name }}"
+
+      vault_call() {
+        local method="$1" path="$2" body="${3:-}"
+        local ts sig
+        ts=$(date -u +%s)
+        sig=$(printf '%s\n%s\n%s\n%s' "$method" "${path%%\?*}" "$ts" "$body" \
+              | openssl dgst -sha256 -hmac "${SECRET}" | sed 's/^.*= //')
+        curl -fsS -X "$method" \
+          -H "X-API-Key: ${API_KEY}" \
+          -H "X-Timestamp: ${ts}" \
+          -H "X-Signature-256: sha256=${sig}" \
+          ${body:+-H "Content-Type: application/json" -d "$body"} \
+          "${VAULT_URL}${path}"
+      }
+
+      GROUPS_JSON=$(vault_call GET "/api/groups")
+      GROUP_ID=$(printf '%s' "$GROUPS_JSON" | jq -r --arg name "$GROUP_NAME" '.[] | select(.name == $name) | .id' | head -n1)
+
+      if [ -z "$GROUP_ID" ] || [ "$GROUP_ID" = "null" ]; then
+        CREATE_BODY=$(jq -nc --arg name "$GROUP_NAME" '{name: $name, description: "Managed by Ansible"}')
+        CREATED_JSON=$(vault_call POST "/api/groups" "$CREATE_BODY")
+        GROUP_ID=$(printf '%s' "$CREATED_JSON" | jq -r '.id')
+      fi
+
+      if [ -n "${ABUSEIPDB_KEY:-}" ]; then
+        WEBHOOKS_JSON=$(vault_call GET "/api/groups/${GROUP_ID}/webhooks")
+        EXISTING_WH=$(printf '%s' "$WEBHOOKS_JSON" | jq -r '.[] | select(.name == "AbuseIPDB Report") | .id' | head -n1)
+        if [ -z "$EXISTING_WH" ] || [ "$EXISTING_WH" = "null" ]; then
+          HEADERS_STR=$(jq -nc --arg k "$ABUSEIPDB_KEY" '{Key: $k, Accept: "application/json"}' | jq -Rs .)
+          WH_BODY=$(jq -nc \
+            --arg name "AbuseIPDB Report" \
+            --arg url "https://api.abuseipdb.com/api/v2/report" \
+            --arg events "IP_ADD,IP_UPDATE" \
+            --arg auth_mode "NONE" \
+            --argjson headers "$HEADERS_STR" \
+            --arg tpl "{\"ip\": \"\$target_address\", \"categories\": \"{{ abuseipdb_report_categories | default('14,18') }}\", \"comment\": \"\$cause\"}" \
+            '{
+              name: $name,
+              target_url: $url,
+              events: $events,
+              auth_mode: $auth_mode,
+              custom_headers_json: $headers,
+              payload_template: $tpl,
+              is_batch: false,
+              max_retries: 3
+            }')
+          vault_call POST "/api/groups/${GROUP_ID}/webhooks" "$WH_BODY" >/dev/null
+        fi
+      fi
+  environment:
+    ABUSEIPDB_KEY: "{{ abuseipdb_api_key | default('') }}"
+  when:
+    - effective_vault_api_key | length > 0
+    - effective_vault_signing_secret | length > 0
+    - effective_vault_api_key != 'auto_local_vault_key_2026'
+  changed_when: false
+
+- name: Configure simply_ip_sync Vault connection, Destination Groups, and Feeds (including optional AbuseIPDB)
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      SYNC_URL="{{ effective_sync_host_url }}"
+      SYNC_KEY="{{ effective_sync_api_key }}"
+      SYNC_SECRET="{{ effective_sync_signing_secret }}"
+      VAULT_URL="{{ effective_vault_url }}"
+      VAULT_KEY="{{ effective_vault_api_key }}"
+      VAULT_SECRET="{{ effective_vault_signing_secret }}"
+
+      sync_call() {
+        local method="$1" path="$2" body="${3:-}"
+        local ts sig
+        ts=$(date -u +%s)
+        sig=$(printf '%s\n%s\n%s\n%s' "$method" "${path%%\?*}" "$ts" "$body" \
+              | openssl dgst -sha256 -hmac "${SYNC_SECRET}" | sed 's/^.*= //')
+        curl -fsS -X "$method" \
+          -H "X-API-Key: ${SYNC_KEY}" \
+          -H "X-Timestamp: ${ts}" \
+          -H "X-Signature-256: sha256=${sig}" \
+          ${body:+-H "Content-Type: application/json" -d "$body"} \
+          "${SYNC_URL}${path}"
+      }
+
+      # 1. Ensure target Vault is registered in simply_ip_sync
+      VAULTS_JSON=$(sync_call GET "/api/vaults")
+      VAULT_ID=$(printf '%s' "$VAULTS_JSON" | jq -r --arg u "$VAULT_URL" '.[] | select(.url == $u) | .id' | head -n1)
+      if [ -z "$VAULT_ID" ] || [ "$VAULT_ID" = "null" ]; then
+        VAULT_ID=$(printf '%s' "$VAULTS_JSON" | jq -r '.[0].id // empty')
+      fi
+      if [ -z "$VAULT_ID" ] || [ "$VAULT_ID" = "null" ]; then
+        V_BODY=$(jq -nc \
+          --arg name "Default Vault" \
+          --arg url "$VAULT_URL" \
+          --arg ak "$VAULT_KEY" \
+          --arg ss "$VAULT_SECRET" \
+          '{name: $name, url: $url, api_key: $ak, signing_secret: $ss}')
+        V_CREATED=$(sync_call POST "/api/vaults" "$V_BODY")
+        VAULT_ID=$(printf '%s' "$V_CREATED" | jq -r '.id')
+      fi
+
+      # 2. Ensure default destination groups and feeds exist
+      GROUPS_SPEC='{{ sync_default_destination_groups | to_json }}'
+      EXISTING_GROUPS=$(sync_call GET "/api/destination-groups")
+
+      printf '%s' "$GROUPS_SPEC" | jq -c '.[]' | while read -r grp; do
+        G_NAME=$(printf '%s' "$grp" | jq -r '.name')
+        G_TARGET=$(printf '%s' "$grp" | jq -r '.target_group_name')
+        G_CRON=$(printf '%s' "$grp" | jq -r '.cron_schedule')
+        G_MODE=$(printf '%s' "$grp" | jq -r '.mode')
+        G_BOGON=$(printf '%s' "$grp" | jq -r '.skip_bogon_filtering')
+
+        GRP_OBJ=$(printf '%s' "$EXISTING_GROUPS" | jq -c --arg n "$G_NAME" '.[] | select(.group.name == $n)' | head -n1)
+        if [ -z "$GRP_OBJ" ]; then
+          G_BODY=$(jq -nc \
+            --arg vid "$VAULT_ID" \
+            --arg name "$G_NAME" \
+            --arg tgt "$G_TARGET" \
+            --arg cron "$G_CRON" \
+            --arg mode "$G_MODE" \
+            --argjson bogon "$G_BOGON" \
+            '{vault_id: $vid, name: $name, target_group_name: $tgt, cron_schedule: $cron, mode: $mode, skip_bogon_filtering: $bogon}')
+          CREATED_G=$(sync_call POST "/api/destination-groups" "$G_BODY")
+          G_ID=$(printf '%s' "$CREATED_G" | jq -r '.id')
+          EXISTING_FEEDS="[]"
+        else
+          G_ID=$(printf '%s' "$GRP_OBJ" | jq -r '.group.id')
+          EXISTING_FEEDS=$(printf '%s' "$GRP_OBJ" | jq -c '.feeds')
+        fi
+
+        # Register standard REGEX_LINE feeds for this group
+        printf '%s' "$grp" | jq -c '.feeds[]' | while read -r fd; do
+          F_NAME=$(printf '%s' "$fd" | jq -r '.name')
+          F_URL=$(printf '%s' "$fd" | jq -r '.source_url')
+          F_TYPE=$(printf '%s' "$fd" | jq -r '.parser_type')
+
+          HAS_FEED=$(printf '%s' "$EXISTING_FEEDS" | jq -r --arg fn "$F_NAME" '.[] | select(.name == $fn) | .id' | head -n1)
+          if [ -z "$HAS_FEED" ] || [ "$HAS_FEED" = "null" ]; then
+            F_BODY=$(jq -nc \
+              --arg name "$F_NAME" \
+              --arg url "$F_URL" \
+              --arg pt "$F_TYPE" \
+              '{name: $name, source_url: $url, parser_type: $pt, parser_config_json: "{}"}')
+            sync_call POST "/api/destination-groups/${G_ID}/feeds" "$F_BODY" >/dev/null
+          fi
+        done
+
+        # If this is external_banlist and AbuseIPDB key is provided, register abuseipdb JSON_PATH feed
+        if [ "$G_TARGET" = "external_banlist" ] && [ -n "${ABUSEIPDB_KEY:-}" ]; then
+          HAS_ABUSE=$(printf '%s' "$EXISTING_FEEDS" | jq -r '.[] | select(.name == "abuseipdb") | .id' | head -n1)
+          if [ -z "$HAS_ABUSE" ] || [ "$HAS_ABUSE" = "null" ]; then
+            ABUSE_CFG=$(jq -nc --arg k "$ABUSEIPDB_KEY" '{
+              array_path: "data",
+              target_address: "$.ipAddress",
+              last_seen_at: "$.lastReportedAt",
+              headers: {
+                Key: $k,
+                Accept: "application/json"
+              }
+            }' | jq -Rs .)
+            ABUSE_BODY=$(jq -nc \
+              --arg name "abuseipdb" \
+              --arg url "https://api.abuseipdb.com/api/v2/blacklist?confidenceMinimum={{ abuseipdb_confidence_minimum | default(90) }}" \
+              --argjson cfg "$ABUSE_CFG" \
+              '{
+                name: $name,
+                source_url: $url,
+                parser_type: "JSON_PATH",
+                parser_config_json: $cfg
+              }')
+            sync_call POST "/api/destination-groups/${G_ID}/feeds" "$ABUSE_BODY" >/dev/null
+          fi
+        fi
+      done
+  environment:
+    ABUSEIPDB_KEY: "{{ abuseipdb_api_key | default('') }}"
+  when:
+    - deploy_simply_ip_sync | bool
+    - effective_sync_api_key | length > 0
+    - effective_sync_signing_secret | length > 0
+  changed_when: false
+
 - name: Display Vault integration and peering summary
   ansible.builtin.debug:
     msg:
       - "Vault Mode: {{ vault_mode }}"
       - "Effective Vault URL: {{ effective_vault_url }}"
       - "Vault Target Group: {{ vault_group_name }}"
+      - "AbuseIPDB Integration: {{ 'Enabled' if (abuseipdb_api_key | default('') | length > 0) else 'Skipped (no API key provided)' }}"
+      - "Simply IP Sync Feeds Configured: {{ 'Yes (Problematics IPS + VPN)' if (deploy_simply_ip_sync | bool) else 'No (deploy_simply_ip_sync=false)' }}"
       - "Hook Executor Host SSH Target: {{ docker_gateway_isolate_ip }}:{{ effective_sshd_port }}"
       - "Hook Report ID: {{ hook_id_report }}"
       - "Hook Block ID: {{ hook_id_block }}"
