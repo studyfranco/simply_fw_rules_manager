@@ -108,6 +108,8 @@ vault_mode: "local"
 deploy_simply_ip_vault: true
 vault_group_name: "Main_Ban"
 vault_normalize_ipv6_to_48: true
+vault_enable_ban_webhook: true
+vault_ban_webhook_url: ""
 remote_vault_url: "https://vault.example.com"
 remote_vault_api_key: ""
 remote_vault_signing_secret: ""
@@ -116,8 +118,34 @@ remote_vault_signing_secret: ""
 deploy_simply_ip_sync: false
 deploy_simply_ip_exporter: false
 
+# simply_ip_exporter Default Endpoint (when deploy_simply_ip_exporter is true)
+exporter_endpoint_name: "Firewall Banlist"
+exporter_endpoint_groups: "{{ vault_group_name ~ (',external_banlist,vpn' if (deploy_simply_ip_sync | default(false) | bool) else '') }}"
+exporter_endpoint_ttl_seconds: 300
+exporter_endpoint_max_age_seconds: 0
+exporter_filter_rfc1918: true
+exporter_filter_bogons: true
+exporter_filter_loopback: true
+
+# simply_hook_executor Orchestration Names & Standalone Fallbacks
+hook_ssh_credential_name: "local-host-hookexecutor"
+hook_ssh_target_name: "local-host"
+hook_name_report: "firewall-report"
+hook_name_block: "firewall-block-ip"
+hook_name_reload: "firewall-reload"
+hook_name_update_containers: "docker-update-containers"
+hook_id_report: ""
+hook_id_block: ""
+hook_id_reload: ""
+hook_id_update_containers: ""
+hook_executor_api_key: ""
+effective_sshd_port: "{{ sshd_port | default(22) }}"
+effective_exporter_feed_url: ""
+effective_whitelist_feed_url: ""
+
 # AbuseIPDB Integration (Optional: leave abuseipdb_api_key empty to skip)
-# - Configures AbuseIPDB Report webhook on simply_ip_vault for vault_group_name (IP_ADD,IP_UPDATE)
+# - Configures AbuseIPDB Report webhook on simply_ip_vault for vault_group_name (IP_ADD,IP_UPDATE, send_normalized_ipv6=false)
+# - Configures Firewall Block webhook on simply_ip_vault for vault_group_name (IP_ADD,IP_UPDATE, send_normalized_ipv6=true)
 # - Configures abuseipdb JSON_PATH feed in simply_ip_sync (when deploy_simply_ip_sync is true)
 abuseipdb_api_key: ""
 abuseipdb_report_categories: "14,18"

@@ -56,7 +56,7 @@ elif is_ipv6_net "${TARGET}"; then
 fi
 
 if [ -f "${hosts_deny_file}" ]; then
-    $SED -i "/^ALL: ${TARGET} : DENY/d" "${hosts_deny_file}" 2>/dev/null
+    $SED -i "\|^ALL: ${TARGET} : DENY|d" "${hosts_deny_file}" 2>/dev/null
 fi
 
 wait

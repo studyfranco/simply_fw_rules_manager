@@ -20,39 +20,82 @@
     - { path: "{{ compose_dir }}/config_simply_ip_vault", owner: "1124", group: "1124", mode: "0700" }
     - { path: "{{ compose_dir }}/config_simply_ip_sync", owner: "1126", group: "1126", mode: "0700" }
     - { path: "{{ compose_dir }}/config_simply_ip_exporter", owner: "1125", group: "1125", mode: "0700" }
-    - { path: "{{ compose_dir }}/postgres_data", mode: "0700" }
+    - { path: "{{ compose_dir }}/postgres_data", owner: "70", group: "70", mode: "0700" }
+
+- name: Ensure persistent postgres_password when database_type is postgres_container and none was provided
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      PASS_FILE="{{ firewall_secrets_dir }}/postgres_password.txt"
+      if [ ! -s "$PASS_FILE" ]; then
+        openssl rand -hex 24 | tr -d '\n' > "$PASS_FILE"
+        chmod 0600 "$PASS_FILE"
+      fi
+      cat "$PASS_FILE"
+  args:
+    executable: /bin/bash
+  register: generated_postgres_password
+  when:
+    - database_type == 'postgres_container'
+    - postgres_password | default('') | length == 0
+  changed_when: false
+  no_log: true
+
+- name: Apply generated postgres_password fact when auto-generated
+  ansible.builtin.set_fact:
+    postgres_password: "{{ generated_postgres_password.stdout }}"
+  when:
+    - database_type == 'postgres_container'
+    - postgres_password | default('') | length == 0
+    - generated_postgres_password.stdout is defined
+  no_log: true
+
+- name: Migrate legacy hook_executor_signing_secret encryption key before creating hook_executor_encryption_key
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      OLD="{{ firewall_secrets_dir }}/hook_executor_signing_secret.txt"
+      NEW="{{ firewall_secrets_dir }}/hook_executor_encryption_key.txt"
+      if [ ! -s "$NEW" ] && [ -f "{{ firewall_dir }}/master_key" ] && [ -s "$OLD" ]; then
+        cp -p "$OLD" "$NEW"
+      fi
+  args:
+    executable: /bin/bash
+  changed_when: false
 
 - name: Generate 32-byte hex Docker secrets idempotently if not already present
   ansible.builtin.shell:
     cmd: >
-      test -s '{{ firewall_secrets_dir }}/{{ item }}.txt' ||
-      openssl rand -hex 32 | tr -d '\n' > '{{ firewall_secrets_dir }}/{{ item }}.txt'
+      test -s '{{ firewall_secrets_dir }}/{{ item.name }}.txt' ||
+      openssl rand -hex 32 | tr -d '\n' > '{{ firewall_secrets_dir }}/{{ item.name }}.txt'
   loop:
-    - fw_encryption_key
-    - sync_encryption_key
-    - vault_encryption_key
-    - exporter_encryption_key
-    - hook_executor_signing_secret
-    - hook_executor_api_key
-    - vault_api_key
-    - vault_signing_secret
+    - { name: fw_encryption_key, owner: "1128", group: "1128" }
+    - { name: hook_executor_encryption_key, owner: "1127", group: "1127" }
+    - { name: sync_encryption_key, owner: "1126", group: "1126" }
+    - { name: vault_encryption_key, owner: "1124", group: "1124" }
+    - { name: exporter_encryption_key, owner: "1125", group: "1125" }
+    - { name: hook_executor_signing_secret, owner: "1128", group: "1128" }
+    - { name: hook_executor_api_key, owner: "1128", group: "1128" }
+    - { name: vault_api_key, owner: "1125", group: "1125" }
+    - { name: vault_signing_secret, owner: "1125", group: "1125" }
   changed_when: false
 
-- name: Ensure strict 0600 permissions on all secret files
+- name: Ensure strict 0600 permissions and matching container UID ownership on all secret files
   ansible.builtin.file:
-    path: "{{ firewall_secrets_dir }}/{{ item }}.txt"
-    owner: root
-    group: root
+    path: "{{ firewall_secrets_dir }}/{{ item.name }}.txt"
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
     mode: "0600"
   loop:
-    - fw_encryption_key
-    - sync_encryption_key
-    - vault_encryption_key
-    - exporter_encryption_key
-    - hook_executor_signing_secret
-    - hook_executor_api_key
-    - vault_api_key
-    - vault_signing_secret
+    - { name: fw_encryption_key, owner: "1128", group: "1128" }
+    - { name: hook_executor_encryption_key, owner: "1127", group: "1127" }
+    - { name: sync_encryption_key, owner: "1126", group: "1126" }
+    - { name: vault_encryption_key, owner: "1124", group: "1124" }
+    - { name: exporter_encryption_key, owner: "1125", group: "1125" }
+    - { name: hook_executor_signing_secret, owner: "1128", group: "1128" }
+    - { name: hook_executor_api_key, owner: "1128", group: "1128" }
+    - { name: vault_api_key, owner: "1125", group: "1125" }
+    - { name: vault_signing_secret, owner: "1125", group: "1125" }
 
 - name: Ensure editable firewall files exist with proper container ownership
   ansible.builtin.file:
@@ -128,14 +171,51 @@
       ansible.builtin.command:
         cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --remove-orphans
 
-    - name: Wait for services to initialize database schemas and generate master credentials
-      ansible.builtin.pause:
-        seconds: 8
+    - name: Wait for services to initialize databases and emit bootstrap Master banners
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          COMPOSE="{{ compose_dir }}/docker-compose.yml"
+          SERVICES=$(docker compose -f "$COMPOSE" ps --services | grep -E '^simply_' || true)
+          port_for() {
+            case "$1" in
+              simply_ip_vault) echo 3000 ;;
+              simply_hook_executor) echo 3001 ;;
+              simply_ip_exporter) echo 3002 ;;
+              simply_ip_sync) echo 3003 ;;
+              simply_fw_rules_manager) echo 3004 ;;
+              *) echo "" ;;
+            esac
+          }
+          for attempt in $(seq 1 30); do
+            pending=0
+            for svc in $SERVICES; do
+              logs_clean=$(docker logs "$svc" 2>&1 | sed -E 's/\x1b\[[0-9;]*m//g' || true)
+              if printf '%s\n' "$logs_clean" | grep -q "Signing secret"; then
+                continue
+              fi
+              port=$(port_for "$svc")
+              if [ "$attempt" -ge 5 ] && [ -n "$port" ] && curl -fsS --max-time 2 "http://127.0.0.1:${port}/ready" >/dev/null 2>&1; then
+                continue
+              fi
+              pending=1
+              break
+            done
+            if [ "$pending" -eq 0 ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Timed out waiting for all simply_* services to initialize" >&2
+          exit 1
+      args:
+        executable: /bin/bash
+      changed_when: false
 
     - name: Extract generated Master API credentials from container logs
       ansible.builtin.shell:
         cmd: |
-          set -e
+          set -euo pipefail
           OUTPUT_FILE="{{ firewall_dir }}/master_key"
           rm -f "${OUTPUT_FILE}"
           touch "${OUTPUT_FILE}"
@@ -144,11 +224,17 @@
           for svc in simply_fw_rules_manager simply_hook_executor simply_ip_vault simply_ip_sync simply_ip_exporter; do
             if docker compose -f {{ compose_dir }}/docker-compose.yml ps --services | grep -q "^${svc}$"; then
               echo "=== [${svc}] ===" >> "${OUTPUT_FILE}"
-              docker logs "${svc}" 2>&1 | grep -E "^\s*║\s*(X-API-Key|Signing secret)" | sed 's/^[[:space:]]*║[[:space:]]*//' | sed 's/[[:space:]]*║[[:space:]]*$//' >> "${OUTPUT_FILE}" || true
+              (docker logs "${svc}" 2>&1 || true) \
+                | sed -E 's/\x1b\[[0-9;]*m//g' \
+                | grep -E "║[[:space:]]*(X-API-Key|Signing secret)" \
+                | sed -E 's/^.*║[[:space:]]*//; s/[[:space:]]*║.*$//' >> "${OUTPUT_FILE}" || true
               echo "" >> "${OUTPUT_FILE}"
             fi
           done
+      args:
+        executable: /bin/bash
       changed_when: true
+      no_log: true
 
     - name: Deploy final docker-compose.yml with container_log_level=warn
       ansible.builtin.template:

@@ -2,6 +2,14 @@
 # Tasks for role: firewall
 # Deploys optimized firewall scripts with lock wait flags, and sets up systemd services and timers
 
+- name: Initialize safe fallback variables for standalone firewall runs
+  ansible.builtin.set_fact:
+    effective_vault_host_url: "{{ effective_vault_host_url | default('http://127.0.0.1:3000' if vault_mode == 'local' else remote_vault_url) }}"
+    effective_vault_api_key: "{{ effective_vault_api_key | default(remote_vault_api_key if vault_mode == 'remote' else '') }}"
+    effective_vault_signing_secret: "{{ effective_vault_signing_secret | default(remote_vault_signing_secret if vault_mode == 'remote' else '') }}"
+    effective_exporter_feed_url: "{{ effective_exporter_feed_url | default('') }}"
+    effective_whitelist_feed_url: "{{ effective_whitelist_feed_url | default('') }}"
+
 - name: Deploy firewall.tools system library
   ansible.builtin.copy:
     src: "{{ firewall_scripts_src_dir | default(role_path ~ '/../../../scripts_etc') }}/firewall.tools"

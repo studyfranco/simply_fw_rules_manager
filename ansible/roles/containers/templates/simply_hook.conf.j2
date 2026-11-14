@@ -5,7 +5,7 @@ actionstop =
 actioncheck =
 actionban = curl -fsS -X POST \
     -H "Content-Type: application/json" \
-    -H "X-API-Key: {{ hook_executor_api_key }}" \
+    -H "X-API-Key: {{ fail2ban_hook_api_key | default(hook_executor_api_key, true) | default('', true) }}" \
     -d '{"target_ip":"<ip>","cause":"fail2ban-<name>"}' \
-    http://simply_hook_executor:3000/api/hooks/{{ hook_id_report }}/execute || true
+    http://simply_hook_executor:3000/api/hooks/{{ hook_id_report | default(hook_name_report, true) | default('firewall-report', true) }}/execute || true
 actionunban =

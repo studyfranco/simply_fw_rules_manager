@@ -19,15 +19,38 @@ declare -a interfaceWithNoRules=()
 # Docker Networks Policy
 declare -a dockerNetworkWithInternetAccess=("{{ docker_net_ext_name }}" "bridge")
 declare -a dockerNetworkWithAccess=("{{ docker_net_isolate_name }}" "{{ docker_net_ext_name }}" "bridge")
-declare -a dockerAccessBetweenThem=()
+declare -a dockerAccessBetweenThem=(
+  "simply_fw_rules_manager;socket_proxy;{{ docker_net_isolate_name }};tcp;2375"
+  "simply_fw_rules_manager;simply_hook_executor;{{ docker_net_isolate_name }};tcp;3000"
+  "fail2ban;simply_hook_executor;{{ docker_net_isolate_name }};tcp;3000"
+{% if vault_mode == 'local' and (deploy_simply_ip_vault | default(true) | bool) %}
+  "simply_ip_vault;simply_hook_executor;{{ docker_net_isolate_name }};tcp;3000"
+{% endif %}
+{% if vault_mode == 'local' and (deploy_simply_ip_vault | default(true) | bool) and (deploy_simply_ip_sync | default(false) | bool) %}
+  "simply_ip_sync;simply_ip_vault;{{ docker_net_isolate_name }};tcp;3000"
+  "simply_ip_sync;simply_ip_vault;{{ docker_net_ext_name }};tcp;3000"
+{% endif %}
+{% if vault_mode == 'local' and (deploy_simply_ip_vault | default(true) | bool) and (deploy_simply_ip_exporter | default(false) | bool) %}
+  "simply_ip_exporter;simply_ip_vault;{{ docker_net_isolate_name }};tcp;3000"
+  "simply_ip_exporter;simply_ip_vault;{{ docker_net_ext_name }};tcp;3000"
+{% endif %}
+{% if database_type == 'postgres_container' %}
+  "simply_fw_rules_manager;{{ postgres_container_name }};{{ docker_net_isolate_name }};tcp;5432"
+  "simply_hook_executor;{{ postgres_container_name }};{{ docker_net_isolate_name }};tcp;5432"
+{% if vault_mode == 'local' and (deploy_simply_ip_vault | default(true) | bool) %}
+  "simply_ip_vault;{{ postgres_container_name }};{{ docker_net_isolate_name }};tcp;5432"
+{% endif %}
+{% if deploy_simply_ip_sync | default(false) | bool %}
+  "simply_ip_sync;{{ postgres_container_name }};{{ docker_net_isolate_name }};tcp;5432"
+{% endif %}
+{% if deploy_simply_ip_exporter | default(false) | bool %}
+  "simply_ip_exporter;{{ postgres_container_name }};{{ docker_net_isolate_name }};tcp;5432"
+{% endif %}
+{% endif %}
+)
 
 # Trusted Administration IPs
 declare -a IPAutor=({{ (operator_whitelist_ips | default([]) + (firewall_trusted_ips | default([]))) | map('quote') | join(' ') }})
-{% if ssh_access_mode == 'whitelist_only' %}
-declare -a IPAutorPortTCP=("{{ effective_sshd_port }}")
-{% else %}
-declare -a IPAutorPortTCP=()
-{% endif %}
 declare -a IPAutorDnatPortTCP=()
 declare -a IPAutorDnatPortUDP=()
 declare -a IPAutorDockerTCP=()
@@ -69,19 +92,19 @@ declare -a WWredirectPortTCP=()
 declare -a WWredirectPortUDP=()
 declare -a WWdnatPortTCP=()
 declare -a WWdnatPortUDP=()
-declare -a WWdockerTCP=()
-declare -a WWdockerUDP=()
+declare -a WWDockerTCP=()
+declare -a WWDockerUDP=()
 
 # Outbound Allowed Ports
 declare -a openPortsOutSideTCP=("80" "443" "53")
 declare -a openPortsOutSideUDP=("53" "123")
 
 # Local Forward / NAT
-declare -a openLocalPortTCP=()
-declare -a openLocalPortUDP=()
+declare -a localOpenPortsTCP=({% if database_type == 'postgres_external' %}"{{ postgres_external_port }}"{% endif %})
+declare -a localOpenPortsUDP=()
 declare -a openDockerTCP=()
 declare -a openDockerUDP=()
 
 # Blocked Country Codes (GeoIP)
-declare -a blocked_country=({{ (firewall_blocked_countries | default([])) | map('quote') | join(' ') }})
-declare -a blocked_country_2=()
+blockedCountry="{{ (firewall_blocked_countries | default([])) | join(',') }}"
+blockedCountry2=""

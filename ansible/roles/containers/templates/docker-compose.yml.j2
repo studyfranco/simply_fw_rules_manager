@@ -125,8 +125,10 @@ services:
       - no-new-privileges:true
     expose:
       - "3000"
+    ports:
+      - "127.0.0.1:3001:3000"
     secrets:
-      - hook_executor_signing_secret
+      - hook_executor_encryption_key
     environment:
       - TZ=Europe/Paris
       - RUST_LOG={{ container_log_level }}
@@ -137,7 +139,7 @@ services:
 {% else %}
       - DATABASE_URL=sqlite:///config/simply_hook_executor.db?mode=rwc
 {% endif %}
-      - SIGNING_SECRET_KEY_FILE=/run/secrets/hook_executor_signing_secret
+      - SIGNING_SECRET_KEY_FILE=/run/secrets/hook_executor_encryption_key
       - REQUIRE_SIGNED_REQUESTS=false
       - ALLOWED_ENV_VARS=PATH,LANG,TERM
     volumes:
@@ -300,8 +302,9 @@ services:
 {% else %}
       - DATABASE_URL=sqlite:///config/simply_ip_exporter.db?mode=rwc
 {% endif %}
+{% set _effective_vault_internal_url = effective_vault_container_url | default(effective_vault_url | default('http://simply_ip_vault:3000' if vault_mode == 'local' else remote_vault_url)) %}
       - EXPORTER_ENCRYPTION_KEY_FILE=/run/secrets/exporter_encryption_key
-      - VAULT_BASE_URL={{ effective_vault_url }}
+      - VAULT_BASE_URL={{ _effective_vault_internal_url }}
       - VAULT_API_KEY_FILE=/run/secrets/vault_api_key
       - VAULT_SIGNING_SECRET_FILE=/run/secrets/vault_signing_secret
     volumes:
@@ -319,6 +322,8 @@ services:
 secrets:
   fw_encryption_key:
     file: {{ firewall_secrets_dir }}/fw_encryption_key.txt
+  hook_executor_encryption_key:
+    file: {{ firewall_secrets_dir }}/hook_executor_encryption_key.txt
   hook_executor_signing_secret:
     file: {{ firewall_secrets_dir }}/hook_executor_signing_secret.txt
   hook_executor_api_key:

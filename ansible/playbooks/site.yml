@@ -66,18 +66,24 @@
       default: ""
       private: true
 
+    - name: input_vault_normalize_ipv6_to_48
+      prompt: "Normalize bare attacker IPv6 addresses to /48 inside simply_ip_vault? (yes/no) [press Enter for 'yes']"
+      default: "yes"
+      private: false
+
   pre_tasks:
-    - name: Apply interactive prompts if variables are not already passed via CLI or inventory
+    - name: Apply interactive prompts while preserving explicit CLI or inventory overrides
       ansible.builtin.set_fact:
-        target_debian_codename_fallback: "{{ target_debian_codename_fallback | default(input_debian_codename) }}"
-        database_type: "{{ database_type | default(input_database_type) }}"
-        postgres_version: "{{ postgres_version | default(input_postgres_version) }}"
-        vault_mode: "{{ vault_mode | default(input_vault_mode) }}"
-        remote_vault_url: "{{ remote_vault_url | default(input_remote_vault_url) }}"
-        deploy_simply_ip_sync: "{{ deploy_simply_ip_sync | default(input_deploy_sync | bool) }}"
-        deploy_simply_ip_exporter: "{{ deploy_simply_ip_exporter | default(input_deploy_exporter | bool) }}"
-        ssh_access_mode: "{{ ssh_access_mode | default(input_ssh_access_mode) }}"
-        country_open_port_default: "{{ country_open_port_default | default(input_country_open_port) }}"
+        target_debian_codename_fallback: "{{ input_debian_codename if (input_debian_codename != 'trixie') else (target_debian_codename_fallback | default('trixie')) }}"
+        database_type: "{{ input_database_type if (input_database_type != 'sqlite') else (database_type | default('sqlite')) }}"
+        postgres_version: "{{ input_postgres_version if (input_postgres_version != '18') else (postgres_version | default('18')) }}"
+        vault_mode: "{{ input_vault_mode if (input_vault_mode != 'local') else (vault_mode | default('local')) }}"
+        remote_vault_url: "{{ input_remote_vault_url if (input_remote_vault_url | length > 0) else (remote_vault_url | default('')) }}"
+        vault_normalize_ipv6_to_48: "{{ (input_vault_normalize_ipv6_to_48 | bool) if (input_vault_normalize_ipv6_to_48 != 'yes') else (vault_normalize_ipv6_to_48 | default(true) | bool) }}"
+        deploy_simply_ip_sync: "{{ (input_deploy_sync | bool) if (input_deploy_sync != 'no') else (deploy_simply_ip_sync | default(false) | bool) }}"
+        deploy_simply_ip_exporter: "{{ (input_deploy_exporter | bool) if (input_deploy_exporter != 'no') else (deploy_simply_ip_exporter | default(false) | bool) }}"
+        ssh_access_mode: "{{ input_ssh_access_mode if (input_ssh_access_mode != 'whitelist_only') else (ssh_access_mode | default('whitelist_only')) }}"
+        country_open_port_default: "{{ input_country_open_port if (input_country_open_port != 'FR') else (country_open_port_default | default('FR')) }}"
         abuseipdb_api_key: "{{ abuseipdb_api_key if (abuseipdb_api_key is defined and abuseipdb_api_key | length > 0) else input_abuseipdb_api_key }}"
         operator_whitelist_ips: >-
           {{
@@ -85,6 +91,12 @@
             if (operator_whitelist_ips is defined and operator_whitelist_ips | length > 0)
             else (input_operator_whitelist_ips.split(',') | map('trim') | reject('eq', '') | list if input_operator_whitelist_ips | length > 0 else [])
           }}
+
+    - name: Compute early effective Vault URLs for container and host roles
+      ansible.builtin.set_fact:
+        effective_vault_container_url: "{{ 'http://simply_ip_vault:3000' if (vault_mode == 'local') else remote_vault_url }}"
+        effective_vault_host_url: "{{ 'http://127.0.0.1:3000' if (vault_mode == 'local') else remote_vault_url }}"
+        effective_vault_url: "{{ 'http://simply_ip_vault:3000' if (vault_mode == 'local') else remote_vault_url }}"
 
   roles:
     - role: common

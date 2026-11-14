@@ -107,3 +107,4 @@
       {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall reload-rules
       {{ hookexecutor_user }} ALL=(root) NOPASSWD: /etc/init.d/firewall reload
       {{ hookexecutor_user }} ALL=(root) NOPASSWD: /etc/init.d/firewall reload-rules
+      {{ hookexecutor_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl start simply-containers-update.service

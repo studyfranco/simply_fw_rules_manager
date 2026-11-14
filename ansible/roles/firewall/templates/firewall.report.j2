@@ -10,10 +10,15 @@ source {{ firewall_dir }}/firewall.tools
 TARGET="$1"
 CAUSE="${2:-Manual_Report}"
 
-URL_API="{{ effective_vault_url }}"
-USER_KEY="{{ effective_vault_api_key }}"
-SECRET="{{ effective_vault_signing_secret }}"
+URL_API="{{ effective_vault_host_url | default('http://127.0.0.1:3000' if vault_mode == 'local' else remote_vault_url) }}"
+USER_KEY="{{ effective_vault_api_key | default('') }}"
+SECRET="{{ effective_vault_signing_secret | default('') }}"
 GROUP_NAME="{{ vault_group_name }}"
+
+if [ -z "$USER_KEY" ] || [ -z "$SECRET" ]; then
+    echo "simply_ip_vault credentials are not yet configured in {{ firewall_dir }}/firewall.report" >&2
+    exit 1
+fi
 
 if [ -z "$TARGET" ]; then
     echo "Usage: $0 <target_ip> [cause]" >&2
@@ -38,8 +43,12 @@ call() {
 
 if ! ip addr show | grep -wq "${TARGET%/*}"; then
     if is_ipv4 "${TARGET}" || is_ipv6 "${TARGET}" || is_ipv4_net "${TARGET}" || is_ipv6_net "${TARGET}"; then
-        call POST /api/ban \
-            "{\"target_address\": \"${TARGET}\", \"group_name\": \"${GROUP_NAME}\", \"cause\": \"${CAUSE}\"}"
+        PAYLOAD=$(${JQ:-/usr/bin/jq} -nc \
+            --arg target "$TARGET" \
+            --arg grp "$GROUP_NAME" \
+            --arg cause "$CAUSE" \
+            '{target_address: $target, group_name: $grp, cause: $cause}')
+        call POST /api/ban "$PAYLOAD"
     fi
 fi
 
