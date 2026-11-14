@@ -70,8 +70,6 @@ services:
       - no-new-privileges:true
     expose:
       - "3000"
-    ports:
-      - "127.0.0.1:3004:3000"
     secrets:
       - fw_encryption_key
       - hook_executor_signing_secret
@@ -125,8 +123,6 @@ services:
       - no-new-privileges:true
     expose:
       - "3000"
-    ports:
-      - "127.0.0.1:3001:3000"
     secrets:
       - hook_executor_encryption_key
     environment:
@@ -198,8 +194,6 @@ services:
       - no-new-privileges:true
     expose:
       - "3000"
-    ports:
-      - "127.0.0.1:3000:3000"
     secrets:
       - vault_encryption_key
     environment:
@@ -245,8 +239,6 @@ services:
       - no-new-privileges:true
     expose:
       - "3003"
-    ports:
-      - "127.0.0.1:3003:3003"
     secrets:
       - sync_encryption_key
     environment:
@@ -286,8 +278,6 @@ services:
       - no-new-privileges:true
     expose:
       - "3002"
-    ports:
-      - "127.0.0.1:3002:3002"
     secrets:
       - exporter_encryption_key
       - vault_api_key
@@ -341,28 +331,6 @@ secrets:
 
 networks:
   {{ docker_net_ext_name }}:
-    driver: bridge
-    name: {{ docker_net_ext_name }}
-    enable_ipv6: true
-    ipam:
-      config:
-        - subnet: {{ docker_net_ext_ipv4_subnet }}
-        - subnet: {{ docker_net_ext_ipv6_subnet }}
-    driver_opts:
-      com.docker.network.bridge.enable_icc: "false"
-      com.docker.network.bridge.name: "{{ docker_net_ext_name }}"
-      com.docker.network.bridge.enable_ip_masquerade: "false"
-
+    external: true
   {{ docker_net_isolate_name }}:
-    driver: bridge
-    name: {{ docker_net_isolate_name }}
-    enable_ipv6: true
-    #internal: true
-    ipam:
-      config:
-        - subnet: {{ docker_net_isolate_ipv4_subnet }}
-        - subnet: {{ docker_net_isolate_ipv6_subnet }}
-    driver_opts:
-      com.docker.network.bridge.enable_icc: "false"
-      com.docker.network.bridge.name: "{{ docker_net_isolate_name }}"
-      com.docker.network.bridge.enable_ip_masquerade: "false"
+    external: true

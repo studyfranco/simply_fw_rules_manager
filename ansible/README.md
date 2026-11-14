@@ -54,10 +54,11 @@ flowchart TD
 ```
 
 ### Key Principles:
-1. **Network Namespace & ICC Isolation:**
-   - `fail2ban`, `socket_proxy`, and `simply_hook_executor` (by default `hook_executor_allow_ext_network: false`) are isolated on the `isolate` Docker bridge (`10.123.0.0/16`, `enable_icc: false`).
-   - Inter-container communication on `isolate` and `ext` is explicitly allow-listed in `firewall.settings` (`dockerAccessBetweenThem`), while management UI/API ports are bound strictly to loopback (`127.0.0.1:3000..3004`).
-   - Inbound traffic to exposed host/container services is controlled by Linux `iptables` / `ip6tables` chains managed by `/etc/firewall/firewall`.
+1. **Network Namespace & ICC Isolation (Zero Compose `ports:`):**
+   - `fail2ban`, `socket_proxy`, and `simply_hook_executor` (by default `hook_executor_allow_ext_network: false`) are isolated on the `isolate` Docker bridge (`10.123.0.0/16` + IPv6 `fd10:1993:1000:1199::2:0/112`, `enable_icc: false`).
+   - `docker-compose.yml` bans host `ports:` bindings completely (`expose:` only) so `docker-proxy` and default Docker chains cannot bypass the firewall.
+   - Inter-container communication on `isolate` and `ext` (`dockerAccessBetweenThem`) and host loopback forwarding (`localDockerTCP` on `127.0.0.1:3000..3004`) are managed solely by Linux `iptables` / `ip6tables` chains via `/etc/firewall/firewall`.
+   - `/etc/docker/daemon.json` enables IPv6 (`ipv6: true`, `ip6tables: true`, `fixed-cidr-v6`, and IPv6 `default-address-pools`).
 2. **Privilege Separation via `hookexecutor`:**
    - Dedicated unprivileged system user `hookexecutor` on the host.
    - Authenticated exclusively via a pinned Ed25519 SSH keypair uploaded into `simply_hook_executor`.
@@ -80,17 +81,19 @@ flowchart TD
 
 ---
 
-## 2. Localhost API Port Map
+## 2. Firewall-Managed Loopback Mapping (`localDockerTCP`)
 
-All container APIs bind strictly to `127.0.0.1`:
+`docker-compose.yml` uses `expose:` only (no `ports:`). When `firewall.settings` is active, `/etc/firewall/firewall` maps host loopback `127.0.0.1` ports to container bridges via `localDockerTCP`:
 
-| Service | Host Port | Container Port | Purpose |
+| Service | Host Loopback (`localDockerTCP`) | Container Port (`expose`) | Purpose |
 | :--- | :--- | :--- | :--- |
 | **`simply_ip_vault`** | `127.0.0.1:3000` | `3000` | Central IP banlist/whitelist Vault & webhook dispatcher |
 | **`simply_hook_executor`** | `127.0.0.1:3001` | `3000` | SSH/local hook runner (`firewall-report`, `firewall-block-ip`, `firewall-reload`, `docker-update-containers`) |
 | **`simply_ip_exporter`** | `127.0.0.1:3002` | `3002` | Raw IP/CIDR feed exporter (`/feed/v1/<token>/list.txt`, optional) |
 | **`simply_ip_sync`** | `127.0.0.1:3003` | `3003` | External threat feed aggregator & Vault syncer (optional) |
 | **`simply_fw_rules_manager`** | `127.0.0.1:3004` | `3000` | Firewall configuration & rule deployment UI/API |
+
+> Host scripts (`firewall.report`, `firewall.get.list`) also resolve live container bridge IPs dynamically via `get_container_ipv4_on_network` in `firewall.tools` with automatic fallback to `127.0.0.1`.
 
 ---
 
@@ -101,7 +104,7 @@ SysVinit scripts in crontab frequently triggered race conditions at boot due to 
 | Systemd Unit | Schedule / Trigger | Purpose |
 | :--- | :--- | :--- |
 | **`firewall.service`** | Boot (`Before=network.target`) | Initializes base chains, anti-spoofing, and core filter rules. |
-| **`firewall-set-ip.service`** | Post-boot (`After=network-online.target docker.service`) | Loads IP sets (`good_ip`, `bad_ip`, GeoIP) and atomic swaps. |
+| **`firewall-set-ip.service`** | Post-boot (`After=network-online.target docker.service`) | Runs `firewall reload-rules` (`localDockerTCP` / inter-container rules), then loads IP sets (`good_ip`, `bad_ip`, GeoIP) with atomic swaps. |
 | **`firewall-update-blocklists.timer`** | Daily at `03:00` | Downloads external threat feeds and whitelists, then reloads `firewall.set.ip`. |
 | **`firewall-daily-reload.timer`** | Daily at `04:00` | Performs a full firewall restart and reload to guarantee state integrity. |
 | **`simply-containers-update.timer`** | Weekly on Monday at `05:00` | Pulls updated container images and reloads firewall rules automatically. |

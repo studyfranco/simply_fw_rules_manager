@@ -10,7 +10,17 @@ source {{ firewall_dir }}/firewall.tools
 TARGET="$1"
 CAUSE="${2:-Manual_Report}"
 
-URL_API="{{ effective_vault_host_url | default('http://127.0.0.1:3000' if vault_mode == 'local' else remote_vault_url) }}"
+{% if vault_mode == 'local' %}
+_VAULT_IP="$(get_container_ipv4_on_network "simply_ip_vault" "{{ docker_net_ext_name }}")"
+[ -z "$_VAULT_IP" ] && _VAULT_IP="$(get_container_ipv4_on_network "simply_ip_vault" "{{ docker_net_isolate_name }}")"
+if [ -n "$_VAULT_IP" ]; then
+    URL_API="http://${_VAULT_IP}:3000"
+else
+    URL_API="{{ effective_vault_host_url | default('http://127.0.0.1:3000') }}"
+fi
+{% else %}
+URL_API="{{ effective_vault_host_url | default(remote_vault_url) }}"
+{% endif %}
 USER_KEY="{{ effective_vault_api_key | default('') }}"
 SECRET="{{ effective_vault_signing_secret | default('') }}"
 GROUP_NAME="{{ vault_group_name }}"

@@ -145,6 +145,48 @@
     group: root
     mode: "0644"
 
+- name: Check if external 'ext' Docker network exists
+  ansible.builtin.command:
+    cmd: docker network inspect {{ docker_net_ext_name }}
+  register: containers_check_net_ext
+  failed_when: false
+  changed_when: false
+
+- name: Ensure 'ext' Docker bridge network exists with IPv6 when running standalone
+  ansible.builtin.command:
+    cmd: >-
+      docker network create
+      --driver bridge
+      --ipv6
+      --subnet={{ docker_net_ext_ipv4_subnet }}
+      --subnet={{ docker_net_ext_ipv6_subnet }}
+      --opt com.docker.network.bridge.enable_icc=false
+      --opt com.docker.network.bridge.name={{ docker_net_ext_name }}
+      --opt com.docker.network.bridge.enable_ip_masquerade=false
+      {{ docker_net_ext_name }}
+  when: containers_check_net_ext.rc != 0
+
+- name: Check if external 'isolate' Docker network exists
+  ansible.builtin.command:
+    cmd: docker network inspect {{ docker_net_isolate_name }}
+  register: containers_check_net_isolate
+  failed_when: false
+  changed_when: false
+
+- name: Ensure 'isolate' Docker bridge network exists with IPv6 when running standalone
+  ansible.builtin.command:
+    cmd: >-
+      docker network create
+      --driver bridge
+      --ipv6
+      --subnet={{ docker_net_isolate_ipv4_subnet }}
+      --subnet={{ docker_net_isolate_ipv6_subnet }}
+      --opt com.docker.network.bridge.enable_icc=false
+      --opt com.docker.network.bridge.name={{ docker_net_isolate_name }}
+      --opt com.docker.network.bridge.enable_ip_masquerade=false
+      {{ docker_net_isolate_name }}
+  when: containers_check_net_isolate.rc != 0
+
 - name: Check if master_key file already exists
   ansible.builtin.stat:
     path: "{{ firewall_dir }}/master_key"
@@ -177,15 +219,17 @@
           set -euo pipefail
           COMPOSE="{{ compose_dir }}/docker-compose.yml"
           SERVICES=$(docker compose -f "$COMPOSE" ps --services | grep -E '^simply_' || true)
-          port_for() {
+          container_port_for() {
             case "$1" in
-              simply_ip_vault) echo 3000 ;;
-              simply_hook_executor) echo 3001 ;;
+              simply_ip_vault|simply_hook_executor|simply_fw_rules_manager) echo 3000 ;;
               simply_ip_exporter) echo 3002 ;;
               simply_ip_sync) echo 3003 ;;
-              simply_fw_rules_manager) echo 3004 ;;
               *) echo "" ;;
             esac
+          }
+          container_ip_for() {
+            docker inspect -f '{% raw %}{{range .NetworkSettings.Networks}}{{if .IPAddress}}{{.IPAddress}} {{end}}{{end}}{% endraw %}' "$1" 2>/dev/null \
+              | awk '{print $1}'
           }
           for attempt in $(seq 1 30); do
             pending=0
@@ -194,8 +238,9 @@
               if printf '%s\n' "$logs_clean" | grep -q "Signing secret"; then
                 continue
               fi
-              port=$(port_for "$svc")
-              if [ "$attempt" -ge 5 ] && [ -n "$port" ] && curl -fsS --max-time 2 "http://127.0.0.1:${port}/ready" >/dev/null 2>&1; then
+              cport=$(container_port_for "$svc")
+              cip=$(container_ip_for "$svc" || true)
+              if [ "$attempt" -ge 5 ] && [ -n "$cport" ] && [ -n "$cip" ] && curl -fsS --max-time 2 "http://${cip}:${cport}/ready" >/dev/null 2>&1; then
                 continue
               fi
               pending=1
@@ -250,6 +295,16 @@
       ansible.builtin.command:
         cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --remove-orphans
 
+    - name: Reload active firewall rules to bind localDockerTCP and container policies after first-boot deploy
+      ansible.builtin.shell:
+        cmd: |
+          if systemctl is-active --quiet firewall && [ -x "{{ firewall_dir }}/firewall" ]; then
+            {{ firewall_dir }}/firewall reload-rules
+          fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
 # ==============================================================================
 # Routine Deploy / Update Workflow (master_key already exists)
 # ==============================================================================
@@ -269,3 +324,13 @@
     - name: Start or update Simply Firewall container stack
       ansible.builtin.command:
         cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --remove-orphans
+
+    - name: Reload active firewall rules to bind localDockerTCP and container policies after stack update
+      ansible.builtin.shell:
+        cmd: |
+          if systemctl is-active --quiet firewall && [ -x "{{ firewall_dir }}/firewall" ]; then
+            {{ firewall_dir }}/firewall reload-rules
+          fi
+      args:
+        executable: /bin/bash
+      changed_when: false

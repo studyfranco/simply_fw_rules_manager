@@ -8,6 +8,7 @@ Requires=firewall.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+ExecStartPre={{ firewall_dir }}/firewall reload-rules
 ExecStart={{ firewall_dir }}/firewall.set.ip reload
 ExecReload={{ firewall_dir }}/firewall.set.ip reload
 

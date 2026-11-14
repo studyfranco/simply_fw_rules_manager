@@ -67,10 +67,40 @@
     extracted_master_creds: "{{ extracted_master_creds_raw.stdout | default('{}') | from_json }}"
   no_log: true
 
+- name: Discover live Docker bridge IPv4 addresses for local containers (no compose ports:)
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      ip_for() {
+        local c="$1" pref_net="$2" ip=""
+        ip=$(docker inspect -f "{% raw %}{{ with (index .NetworkSettings.Networks \"${pref_net}\") }}{{ .IPAddress }}{{ end }}{% endraw %}" "$c" 2>/dev/null || true)
+        if [ -z "$ip" ]; then
+          ip=$(docker inspect -f '{% raw %}{{range .NetworkSettings.Networks}}{{if .IPAddress}}{{.IPAddress}} {{end}}{{end}}{% endraw %}' "$c" 2>/dev/null | awk '{print $1}' || true)
+        fi
+        printf '%s' "$ip"
+      }
+      jq -nc \
+        --arg v "$(ip_for simply_ip_vault {{ docker_net_ext_name }})" \
+        --arg h "$(ip_for simply_hook_executor {{ docker_net_isolate_name }})" \
+        --arg e "$(ip_for simply_ip_exporter {{ docker_net_ext_name }})" \
+        --arg s "$(ip_for simply_ip_sync {{ docker_net_ext_name }})" \
+        --arg f "$(ip_for simply_fw_rules_manager {{ docker_net_isolate_name }})" \
+        '{vault_ip: $v, hook_ip: $h, exporter_ip: $e, sync_ip: $s, fw_ip: $f}'
+  args:
+    executable: /bin/bash
+  register: live_container_ips_raw
+  changed_when: false
+
 - name: Determine effective ecosystem URLs and Master credentials
   ansible.builtin.set_fact:
+    _live_ips: "{{ live_container_ips_raw.stdout | default('{}') | from_json }}"
     effective_vault_container_url: "{{ 'http://simply_ip_vault:3000' if (vault_mode == 'local') else remote_vault_url }}"
-    effective_vault_host_url: "{{ 'http://127.0.0.1:3000' if (vault_mode == 'local') else remote_vault_url }}"
+    effective_vault_host_url: >-
+      {{
+        ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).vault_ip) ~ ':3000')
+        if (vault_mode == 'local' and ((live_container_ips_raw.stdout | default('{}') | from_json).vault_ip | default('') | length > 0))
+        else ('http://127.0.0.1:3000' if (vault_mode == 'local') else remote_vault_url)
+      }}
     effective_vault_url: "{{ 'http://simply_ip_vault:3000' if (vault_mode == 'local') else remote_vault_url }}"
     effective_vault_api_key: >-
       {{
@@ -84,17 +114,37 @@
         if (vault_mode == 'remote')
         else (hostvars[inventory_hostname].local_vault_signing_secret | default(extracted_master_creds.vault_sec, true) | default('', true))
       }}
-    effective_hook_host_url: "http://127.0.0.1:3001"
+    effective_hook_host_url: >-
+      {{
+        ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).hook_ip) ~ ':3000')
+        if ((live_container_ips_raw.stdout | default('{}') | from_json).hook_ip | default('') | length > 0)
+        else 'http://127.0.0.1:3001'
+      }}
     effective_hook_container_url: "http://simply_hook_executor:3000"
     effective_hook_api_key: "{{ hostvars[inventory_hostname].local_hook_api_key | default(extracted_master_creds.hook_key, true) | default('', true) }}"
     effective_hook_signing_secret: "{{ hostvars[inventory_hostname].local_hook_signing_secret | default(extracted_master_creds.hook_sec, true) | default('', true) }}"
-    effective_fw_host_url: "http://127.0.0.1:3004"
+    effective_fw_host_url: >-
+      {{
+        ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).fw_ip) ~ ':3000')
+        if ((live_container_ips_raw.stdout | default('{}') | from_json).fw_ip | default('') | length > 0)
+        else 'http://127.0.0.1:3004'
+      }}
     effective_fw_api_key: "{{ hostvars[inventory_hostname].local_fw_api_key | default(extracted_master_creds.fw_key, true) | default('', true) }}"
     effective_fw_signing_secret: "{{ hostvars[inventory_hostname].local_fw_signing_secret | default(extracted_master_creds.fw_sec, true) | default('', true) }}"
-    effective_exporter_host_url: "http://127.0.0.1:3002"
+    effective_exporter_host_url: >-
+      {{
+        ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).exporter_ip) ~ ':3002')
+        if ((live_container_ips_raw.stdout | default('{}') | from_json).exporter_ip | default('') | length > 0)
+        else 'http://127.0.0.1:3002'
+      }}
     effective_exporter_api_key: "{{ hostvars[inventory_hostname].local_exporter_api_key | default(extracted_master_creds.exp_key, true) | default('', true) }}"
     effective_exporter_signing_secret: "{{ hostvars[inventory_hostname].local_exporter_signing_secret | default(extracted_master_creds.exp_sec, true) | default('', true) }}"
-    effective_sync_host_url: "http://127.0.0.1:3003"
+    effective_sync_host_url: >-
+      {{
+        ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).sync_ip) ~ ':3003')
+        if ((live_container_ips_raw.stdout | default('{}') | from_json).sync_ip | default('') | length > 0)
+        else 'http://127.0.0.1:3003'
+      }}
     effective_sync_api_key: "{{ hostvars[inventory_hostname].local_sync_api_key | default(extracted_master_creds.sync_key, true) | default('', true) }}"
     effective_sync_signing_secret: "{{ hostvars[inventory_hostname].local_sync_signing_secret | default(extracted_master_creds.sync_sec, true) | default('', true) }}"
   no_log: true
@@ -591,6 +641,17 @@
     cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --force-recreate simply_fw_rules_manager
   when: (_hook_prov.fw_secrets_changed | default(false)) | bool
 
+- name: Reload active firewall rules after simply_fw_rules_manager recreate
+  ansible.builtin.shell:
+    cmd: |
+      if systemctl is-active --quiet firewall && [ -x "{{ firewall_dir }}/firewall" ]; then
+        {{ firewall_dir }}/firewall reload-rules
+      fi
+  args:
+    executable: /bin/bash
+  when: (_hook_prov.fw_secrets_changed | default(false)) | bool
+  changed_when: false
+
 # ==============================================================================
 # 3. Fail2Ban: Render real hook_id_report and API key into simply_hook.conf
 # ==============================================================================
@@ -665,7 +726,7 @@
         CUR_SETTINGS=$(vault_call GET "/api/settings")
         CUR_NORM=$(printf '%s' "$CUR_SETTINGS" | jq -r '.normalize_ipv6_to_48')
         if [ "$CUR_NORM" != "$DESIRED_NORM" ]; then
-          vault_call PUT "/api/settings" "{\"normalize_ipv6_to_48\": ${DESIRED_NORM}}" >/dev/null
+          vault_call PUT "/api/settings" "{\"normalize_ipv6_to_48\": ${DESIRED_NORM} }" >/dev/null
           CHANGED=true
         fi
       fi
@@ -871,6 +932,32 @@
         cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --force-recreate simply_ip_exporter
       when: exporter_secrets_copy is changed
 
+    - name: Refresh simply_ip_exporter live bridge IP and firewall rules after recreate
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          if systemctl is-active --quiet firewall && [ -x "{{ firewall_dir }}/firewall" ]; then
+            {{ firewall_dir }}/firewall reload-rules
+          fi
+          ip=$(docker inspect -f '{% raw %}{{ with (index .NetworkSettings.Networks "{% endraw %}{{ docker_net_ext_name }}{% raw %}") }}{{ .IPAddress }}{{ end }}{% endraw %}' simply_ip_exporter 2>/dev/null || true)
+          if [ -z "$ip" ]; then
+            ip=$(docker inspect -f '{% raw %}{{range .NetworkSettings.Networks}}{{if .IPAddress}}{{.IPAddress}} {{end}}{{end}}{% endraw %}' simply_ip_exporter 2>/dev/null | awk '{print $1}' || true)
+          fi
+          printf '%s' "$ip"
+      args:
+        executable: /bin/bash
+      register: exporter_new_ip_raw
+      when: exporter_secrets_copy is changed
+      changed_when: false
+
+    - name: Update effective_exporter_host_url after simply_ip_exporter recreate
+      ansible.builtin.set_fact:
+        effective_exporter_host_url: "{{ 'http://' ~ (exporter_new_ip_raw.stdout | trim) ~ ':3002' }}"
+      when:
+        - exporter_secrets_copy is changed
+        - exporter_new_ip_raw.stdout is defined
+        - exporter_new_ip_raw.stdout | trim | length > 0
+
     - name: Wait for simply_ip_exporter readiness after secret update
       ansible.builtin.uri:
         url: "{{ effective_exporter_host_url }}/ready"
@@ -982,6 +1069,7 @@
 
     - name: Set effective exporter feed URL fact
       ansible.builtin.set_fact:
+        exporter_feed_path: "{{ (exporter_ep_raw.stdout | from_json).feed_path }}"
         effective_exporter_feed_url: "{{ effective_exporter_host_url ~ (exporter_ep_raw.stdout | from_json).feed_path }}"
       when:
         - exporter_ep_raw.stdout is defined

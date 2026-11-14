@@ -140,6 +140,7 @@ hook_id_reload: ""
 hook_id_update_containers: ""
 hook_executor_api_key: ""
 effective_sshd_port: "{{ sshd_port | default(22) }}"
+exporter_feed_path: ""
 effective_exporter_feed_url: ""
 effective_whitelist_feed_url: ""
 
