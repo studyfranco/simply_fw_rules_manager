@@ -62,6 +62,7 @@
           <h1>Simply FW Rules Manager</h1>
         </div>
         <div id="header-actions" class="header-actions">
+          <button id="header-generate-apply-btn" type="button" class="btn btn-primary btn-sm hidden" title="Générer les 3 fichiers et déclencher le hook en 1 clic">⚡ Generate &amp; Apply</button>
           <span id="current-key-tier" class="badge badge-tier" title="Your key's RBAC tier"></span>
           <button id="refresh-btn" type="button" class="btn btn-secondary btn-sm">Refresh</button>
           <button id="logout-btn" type="button" class="btn btn-logout btn-sm" title="Also clears the saved session from this browser">Logout</button>
@@ -207,25 +208,24 @@
   <div id="secret-reveal-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="secret-reveal-title">
     <div class="modal-card card">
       <h3 id="secret-reveal-title">API Key Created</h3>
-      <p class="subtitle">Copy both values now — the signing secret cannot be retrieved or displayed again.</p>
       <div class="key-reveal" id="secret-reveal-box">
         <div id="secret-reveal-key-row">
           <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span class="key-reveal-label">API Key:</span>
+            <p class="key-reveal-label" style="margin:0;">API Key (Save this now — shown only once):</p>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-secret-key" style="padding:0.2rem 0.5rem;font-size:0.75rem;">Copy</button>
           </div>
           <code id="secret-reveal-key-val" class="key-reveal-value"></code>
         </div>
-        <div id="secret-reveal-secret-row">
+        <div id="secret-reveal-secret-row" style="margin-top:0.75rem;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span class="key-reveal-label">Signing Secret:</span>
+            <p class="key-reveal-label" style="margin:0;">Signing Secret (For HMAC-SHA256 — shown only once):</p>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-secret-val" style="padding:0.2rem 0.5rem;font-size:0.75rem;">Copy</button>
           </div>
           <code id="secret-reveal-secret-val" class="key-reveal-value"></code>
         </div>
-        <div class="form-actions mt-4">
-          <button type="button" id="secret-reveal-done" class="btn btn-primary">Done</button>
-        </div>
+      </div>
+      <div class="form-actions mt-4">
+        <button type="button" id="secret-reveal-done" class="btn btn-primary">Done</button>
       </div>
     </div>
   </div>

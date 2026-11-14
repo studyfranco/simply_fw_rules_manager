@@ -287,6 +287,7 @@ async function attemptSignIn(apiKey, signingSecret) {
   document.getElementById("keys-tab-btn")?.classList.toggle("hidden", !(me.is_master || me.can_manage_keys));
   document.getElementById("system-settings-tab-btn")?.classList.toggle("hidden", !me.is_master);
   document.getElementById("audit-tab-btn")?.classList.toggle("hidden", !me.is_master);
+  document.getElementById("header-generate-apply-btn")?.classList.toggle("hidden", !(me.is_master || me.can_deploy_and_reload));
 
   document.getElementById("login-error").classList.add("hidden");
   document.getElementById("login-screen").classList.add("hidden");
@@ -320,6 +321,20 @@ document.getElementById("logout-btn")?.addEventListener("click", onLogout);
 
 const onRefresh = () => loadTab(activeTab);
 document.getElementById("refresh-btn")?.addEventListener("click", onRefresh);
+
+document.getElementById("header-generate-apply-btn")?.addEventListener("click", async () => {
+  try {
+    const res = await client.post("/api/firewall/generate-and-reload");
+    if (res.hook?.status === "SUCCESS") {
+      toast("Fichiers générés & pare-feu rechargé avec succès", "success");
+    } else {
+      toast("Fichiers générés (" + (res.hook?.status || "DONE") + ")", "info");
+    }
+    if (activeTab === "deploy") await renderDeployTab();
+  } catch (err) {
+    toast("Erreur Generate & Apply: " + err.message, "error");
+  }
+});
 
 // Key Modal & Secret Reveal Event Listeners
 document.getElementById("kf-cancel")?.addEventListener("click", () => {
@@ -371,7 +386,7 @@ document.getElementById("key-editor-form")?.addEventListener("submit", async (e)
       const res = await client.post("/api/keys", payload);
       document.getElementById("create-key-modal")?.classList.add("hidden");
       await renderKeysTab();
-      showIssuedSecretBanner(`Created Key '${res.key.name}'`, res.api_key, res.signing_secret);
+      showIssuedSecretBanner("API Key Created", res.raw_key || res.api_key, res.signing_secret);
     }
   } catch (err) {
     toast("Save key failed: " + err.message, "error");
@@ -466,9 +481,15 @@ async function renderSettingsTab() {
     .map(([iface]) => iface)
     .join("\n");
 
-  const filteredZones = zoneFilterState
-    ? zoneRules.filter((r) => r.zone === zoneFilterState)
-    : zoneRules;
+  const filteredZones = zoneRules.filter((r) => {
+    if (zoneFilterState && r.zone !== zoneFilterState) return false;
+    if (window._zoneSearchQuery) {
+      const q = window._zoneSearchQuery.toLowerCase();
+      const hay = `${r.zone} ${r.rule_kind} ${r.value} ${r.container_name || ""} ${r.comment || ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
 
   const containerOptions = (docker.containers || [])
     .map((c) => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)} (${escapeHtml(c.state)})</option>`)
@@ -482,50 +503,18 @@ async function renderSettingsTab() {
     <datalist id="dl-networks">${networkOptions}</datalist>
 
     <section class="card">
-      <div class="list-header">
-        <h2>Interfaces Réseau, IPs de Confiance (IPAutor) &amp; GeoIP (<code>firewall.settings</code>)</h2>
-      </div>
       <form id="settings-network-form">
-        <div class="grid-2">
+        <div class="list-header">
+          <div>
+            <h2>Interfaces Réseau, IPs de Confiance (IPAutor) &amp; GeoIP (<code>firewall.settings</code>)</h2>
+            <p class="subtitle">Configuration globale des interfaces hôte, listes blanches IP/DNAT et filtrage GeoIP.</p>
+          </div>
+          ${canEdit ? `<button type="submit" class="btn btn-primary">Sauvegarder les Paramètres Réseau &amp; GeoIP</button>` : ""}
+        </div>
+        <div class="grid-3">
           <div class="form-group">
             <label for="cfg-main-inter">Interface Principale Externe (<code>mainInter</code>)</label>
             <input type="text" id="cfg-main-inter" class="input-field font-mono" value="${escapeHtml(settings.main_inter)}" required>
-          </div>
-          <div class="form-group">
-            <label for="cfg-inter-out">Interfaces Sortantes (<code>INTEROut</code> — 1 par ligne: <code>iface;ipv4_cidr;ipv6_cidr</code>)</label>
-            <textarea id="cfg-inter-out" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.inter_out))}</textarea>
-          </div>
-          <div class="form-group">
-            <label for="cfg-inter-outside">Interfaces Accès Sortant NAT (<code>interfaceToGoOutSide</code>)</label>
-            <textarea id="cfg-inter-outside" class="input-field font-mono" rows="3">${escapeHtml(arrayToLines(settings.interface_to_go_outside))}</textarea>
-          </div>
-          <div class="form-group">
-            <label for="cfg-inter-intern-local">Interfaces Internes ayant accès Local (<code>internInterfaceHaveAccessAsLocal</code>)</label>
-            <textarea id="cfg-inter-intern-local" class="input-field font-mono" rows="3">${escapeHtml(arrayToLines(settings.intern_interface_have_access_as_local))}</textarea>
-          </div>
-          <div class="form-group">
-            <label for="cfg-inter-local">Interfaces Locales (<code>interfaceLocal</code>)</label>
-            <textarea id="cfg-inter-local" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.interface_local))}</textarea>
-          </div>
-          <div class="form-group">
-            <label for="cfg-inter-dhcp">Interfaces avec DHCP actif (<code>interfaceWithDHCP</code> — clés actives <code>iface;v4;v6</code>)</label>
-            <textarea id="cfg-inter-dhcp" class="input-field font-mono" rows="2">${escapeHtml(dhcpLines)}</textarea>
-          </div>
-          <div class="form-group">
-            <label for="cfg-inter-norules">Interfaces structure seule sans règles auto (<code>interfaceWithNoRules</code>)</label>
-            <textarea id="cfg-inter-norules" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.interface_with_no_rules))}</textarea>
-          </div>
-          <div class="form-group">
-            <label for="cfg-ip-autor">IPs de Confiance (<code>IPAutor</code> — IPv4 / IPv6 / CIDR, 1 par ligne)</label>
-            <textarea id="cfg-ip-autor" class="input-field font-mono" rows="3">${escapeHtml(arrayToLines(settings.ip_autor))}</textarea>
-          </div>
-          <div class="form-group">
-            <label for="cfg-ip-autor-dnat-tcp">DNAT TCP IPs de Confiance (<code>IPAutorDnatPortTCP</code> — <code>port,iface,ipv4,ipv6,dest_port</code>)</label>
-            <textarea id="cfg-ip-autor-dnat-tcp" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.ip_autor_dnat_port_tcp))}</textarea>
-          </div>
-          <div class="form-group">
-            <label for="cfg-ip-autor-dnat-udp">DNAT UDP IPs de Confiance (<code>IPAutorDnatPortUDP</code>)</label>
-            <textarea id="cfg-ip-autor-dnat-udp" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.ip_autor_dnat_port_udp))}</textarea>
           </div>
           <div class="form-group">
             <label for="cfg-country-open">Pays Autorisés Zone Open (<code>countryOpenPort</code>, ex: <code>FR,CH</code>)</label>
@@ -538,15 +527,51 @@ async function renderSettingsTab() {
               <input type="text" id="cfg-blocked-country-2" class="input-field font-mono" placeholder="blockedCountry2" value="${escapeHtml(settings.blocked_country_2)}">
             </div>
           </div>
+          <div class="form-group">
+            <label for="cfg-inter-out">Interfaces Sortantes (<code>INTEROut</code>: <code>iface;ipv4;ipv6</code>)</label>
+            <textarea id="cfg-inter-out" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.inter_out))}</textarea>
+          </div>
+          <div class="form-group">
+            <label for="cfg-inter-outside">Interfaces Accès Sortant NAT (<code>interfaceToGoOutSide</code>)</label>
+            <textarea id="cfg-inter-outside" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.interface_to_go_outside))}</textarea>
+          </div>
+          <div class="form-group">
+            <label for="cfg-inter-intern-local">Interfaces Internes accès Local (<code>internInterfaceHaveAccessAsLocal</code>)</label>
+            <textarea id="cfg-inter-intern-local" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.intern_interface_have_access_as_local))}</textarea>
+          </div>
+          <div class="form-group">
+            <label for="cfg-inter-local">Interfaces Locales (<code>interfaceLocal</code>)</label>
+            <textarea id="cfg-inter-local" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.interface_local))}</textarea>
+          </div>
+          <div class="form-group">
+            <label for="cfg-inter-dhcp">Interfaces avec DHCP actif (<code>interfaceWithDHCP</code>: <code>iface;v4;v6</code>)</label>
+            <textarea id="cfg-inter-dhcp" class="input-field font-mono" rows="2">${escapeHtml(dhcpLines)}</textarea>
+          </div>
+          <div class="form-group">
+            <label for="cfg-inter-norules">Interfaces sans règles auto (<code>interfaceWithNoRules</code>)</label>
+            <textarea id="cfg-inter-norules" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.interface_with_no_rules))}</textarea>
+          </div>
+          <div class="form-group">
+            <label for="cfg-ip-autor">IPs de Confiance (<code>IPAutor</code> — IPv4 / IPv6 / CIDR)</label>
+            <textarea id="cfg-ip-autor" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.ip_autor))}</textarea>
+          </div>
+          <div class="form-group">
+            <label for="cfg-ip-autor-dnat-tcp">DNAT TCP IPs de Confiance (<code>IPAutorDnatPortTCP</code>)</label>
+            <textarea id="cfg-ip-autor-dnat-tcp" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.ip_autor_dnat_port_tcp))}</textarea>
+          </div>
+          <div class="form-group">
+            <label for="cfg-ip-autor-dnat-udp">DNAT UDP IPs de Confiance (<code>IPAutorDnatPortUDP</code>)</label>
+            <textarea id="cfg-ip-autor-dnat-udp" class="input-field font-mono" rows="2">${escapeHtml(arrayToLines(settings.ip_autor_dnat_port_udp))}</textarea>
+          </div>
         </div>
-        ${canEdit ? `<div style="margin-top:1rem;"><button type="submit" class="btn btn-primary">Sauvegarder les Paramètres Réseau &amp; GeoIP</button></div>` : ""}
       </form>
     </section>
 
-    <section class="card" style="margin-top:1.5rem;">
+    <section class="card" style="margin-top:1.25rem;">
       <div class="list-header">
         <h2>Règles d'Ouverture par Zone (<code>ip_autor</code>, <code>internal</code>, <code>local</code>, <code>open</code>, <code>ww</code>)</h2>
-        <div style="display:flex;gap:0.5rem;align-items:center;">
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <input type="text" id="zone-search-input" class="input-field" style="width:220px;" placeholder="Filtrer port, conteneur, note..." value="${escapeHtml(window._zoneSearchQuery || "")}">
           <select id="zone-filter-select" class="input-field" style="width:auto;">
             <option value="">Toutes les zones (${zoneRules.length})</option>
             <option value="ip_autor" ${zoneFilterState === "ip_autor" ? "selected" : ""}>ip_autor (Trusted IPs)</option>
@@ -588,6 +613,14 @@ async function renderSettingsTab() {
     zoneFilterState = e.target.value;
     renderSettingsTab();
   });
+  document.getElementById("zone-search-input")?.addEventListener("input", (e) => {
+    window._zoneSearchQuery = e.target.value;
+    const pos = e.target.selectionStart;
+    renderSettingsTab().then(() => {
+      const el = document.getElementById("zone-search-input");
+      if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+    });
+  });
 
   if (canEdit) {
     document.getElementById("settings-network-form").addEventListener("submit", async (e) => {
@@ -624,6 +657,27 @@ async function renderSettingsTab() {
       newBtn.addEventListener("click", () => showZoneRuleForm(null));
     }
 
+    panel.querySelectorAll("[data-toggle-zone]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const rule = zoneRules.find((r) => r.id === btn.dataset.toggleZone);
+        if (!rule) return;
+        try {
+          await client.put("/api/firewall/zones/" + rule.id, {
+            zone: rule.zone,
+            rule_kind: rule.rule_kind,
+            value: rule.value,
+            container_name: rule.container_name || null,
+            enabled: !rule.enabled,
+            comment: rule.comment || "",
+          });
+          toast(rule.enabled ? "Règle désactivée" : "Règle activée", "success");
+          await renderSettingsTab();
+        } catch (err) {
+          toast("Erreur bascule: " + err.message, "error");
+        }
+      });
+    });
+
     panel.querySelectorAll("[data-edit-zone]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const rule = zoneRules.find((r) => r.id === btn.dataset.editZone);
@@ -647,19 +701,22 @@ async function renderSettingsTab() {
 }
 
 function renderZoneRuleRow(r, canEdit) {
+  const toggleBadge = canEdit
+    ? `<button type="button" class="badge badge-toggle ${r.enabled ? "badge-running" : "badge-stopped"}" data-toggle-zone="${escapeHtml(r.id)}" title="Cliquer pour activer/désactiver en 1 clic">${r.enabled ? "OUI" : "NON"}</button>`
+    : (r.enabled ? `<span class="badge badge-running">OUI</span>` : `<span class="badge badge-stopped">NON</span>`);
   return `<tr>
     <td class="font-mono"><span class="badge">${escapeHtml(r.zone)}</span></td>
     <td class="font-mono">${escapeHtml(r.rule_kind)}</td>
     <td class="font-mono">${escapeHtml(r.value)}</td>
     <td class="font-mono">${escapeHtml(r.container_name || "—")}</td>
     <td>${r.container_name ? statusBadge(r.container_status) : `<span class="text-muted text-sm">Hôte</span>`}</td>
-    <td>${r.enabled ? `<span class="badge badge-running">OUI</span>` : `<span class="badge badge-stopped">NON</span>`}</td>
+    <td>${toggleBadge}</td>
     <td class="text-muted text-sm">${escapeHtml(r.comment || "—")}</td>
-    <td>
-      ${canEdit ? `
+    <td class="row-actions">
+      ${canEdit ? `<div class="row-actions-group">
         <button type="button" class="btn btn-secondary btn-sm" data-edit-zone="${escapeHtml(r.id)}">Éditer</button>
         <button type="button" class="btn btn-danger btn-sm" data-delete-zone="${escapeHtml(r.id)}">Suppr.</button>
-      ` : "—"}
+      </div>` : "—"}
     </td>
   </tr>`;
 }
@@ -791,10 +848,14 @@ async function renderDockerTab() {
     <datalist id="dl-docker-networks">${networkOptions}</datalist>
 
     <section class="card">
-      <div class="list-header">
-        <h2>Réseaux Docker &amp; Accès Internet (<code>firewall.settings</code>)</h2>
-      </div>
       <form id="docker-networks-settings-form">
+        <div class="list-header">
+          <div>
+            <h2>Réseaux Docker &amp; Accès Internet (<code>firewall.settings</code>)</h2>
+            <p class="subtitle">Déclarez les réseaux autorisés à sortir sur Internet ou gérés par le pare-feu.</p>
+          </div>
+          ${canEdit ? `<button type="submit" class="btn btn-primary">Sauvegarder les Réseaux Docker</button>` : ""}
+        </div>
         <div class="grid-2">
           <div class="form-group">
             <label for="dk-net-internet">Réseaux Docker avec accès Internet sortant (<code>dockerNetworkWithInternetAccess</code> — 1 par ligne)</label>
@@ -805,14 +866,16 @@ async function renderDockerTab() {
             <textarea id="dk-net-access" class="input-field font-mono" rows="3">${escapeHtml(arrayToLines(settings.docker_network_with_access))}</textarea>
           </div>
         </div>
-        ${canEdit ? `<button type="submit" class="btn btn-primary" style="margin-top:0.75rem;">Sauvegarder les Réseaux Docker</button>` : ""}
       </form>
     </section>
 
-    <section class="card" style="margin-top:1.5rem;">
+    <section class="card" style="margin-top:1.25rem;">
       <div class="list-header">
         <h2>Flux Inter-Conteneurs (<code>dockerAccessBetweenThem</code>)</h2>
-        ${canEdit ? `<button type="button" id="btn-new-docker-rule" class="btn btn-primary">+ Nouveau Flux Inter-Conteneurs</button>` : ""}
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <input type="text" id="docker-rule-search" class="input-field" style="width:220px;" placeholder="Filtrer conteneur, port, réseau..." value="${escapeHtml(window._dockerSearchQuery || "")}">
+          ${canEdit ? `<button type="button" id="btn-new-docker-rule" class="btn btn-primary">+ Nouveau Flux Inter-Conteneurs</button>` : ""}
+        </div>
       </div>
       <p class="text-muted text-sm" style="margin-bottom:1rem;">
         Format généré: <code>source;destination;network;proto;ports</code>. Lors du clic sur <strong>Générer</strong>, seules les règles dont les <strong>deux conteneurs (source ET destination) sont RUNNING</strong> sont écrites dans <code>firewall.settings</code>.
@@ -834,24 +897,34 @@ async function renderDockerTab() {
             </tr>
           </thead>
           <tbody>
-            ${interRules.length ? interRules.map((r) => `
-              <tr>
-                <td class="font-mono">${escapeHtml(r.source_container)}</td>
-                <td>${statusBadge(r.source_status)}</td>
-                <td class="font-mono">${escapeHtml(r.destination_container)}</td>
-                <td>${statusBadge(r.destination_status)}</td>
-                <td class="font-mono">${escapeHtml(r.network_name)}</td>
-                <td class="font-mono">${escapeHtml(r.proto.toUpperCase())}</td>
-                <td class="font-mono">${escapeHtml(r.ports)}</td>
-                <td>${r.enabled ? `<span class="badge badge-running">OUI</span>` : `<span class="badge badge-stopped">NON</span>`}</td>
-                <td>
-                  ${canEdit ? `
-                    <button type="button" class="btn btn-secondary btn-sm" data-edit-dkrule="${escapeHtml(r.id)}">Éditer</button>
-                    <button type="button" class="btn btn-danger btn-sm" data-delete-dkrule="${escapeHtml(r.id)}">Suppr.</button>
-                  ` : "—"}
-                </td>
-              </tr>
-            `).join("") : `<tr><td colspan="9" class="empty-state">Aucun flux inter-conteneurs configuré.</td></tr>`}
+            ${(() => {
+              const q = (window._dockerSearchQuery || "").toLowerCase();
+              const visibleRules = q
+                ? interRules.filter((r) => `${r.source_container} ${r.destination_container} ${r.network_name} ${r.proto} ${r.ports} ${r.comment || ""}`.toLowerCase().includes(q))
+                : interRules;
+              return visibleRules.length ? visibleRules.map((r) => {
+                const toggleBadge = canEdit
+                  ? `<button type="button" class="badge badge-toggle ${r.enabled ? "badge-running" : "badge-stopped"}" data-toggle-dkrule="${escapeHtml(r.id)}" title="Cliquer pour activer/désactiver en 1 clic">${r.enabled ? "OUI" : "NON"}</button>`
+                  : (r.enabled ? `<span class="badge badge-running">OUI</span>` : `<span class="badge badge-stopped">NON</span>`);
+                return `
+                  <tr>
+                    <td class="font-mono">${escapeHtml(r.source_container)}</td>
+                    <td>${statusBadge(r.source_status)}</td>
+                    <td class="font-mono">${escapeHtml(r.destination_container)}</td>
+                    <td>${statusBadge(r.destination_status)}</td>
+                    <td class="font-mono">${escapeHtml(r.network_name)}</td>
+                    <td class="font-mono">${escapeHtml(r.proto.toUpperCase())}</td>
+                    <td class="font-mono">${escapeHtml(r.ports)}</td>
+                    <td>${toggleBadge}</td>
+                    <td class="row-actions">
+                      ${canEdit ? `<div class="row-actions-group">
+                        <button type="button" class="btn btn-secondary btn-sm" data-edit-dkrule="${escapeHtml(r.id)}">Éditer</button>
+                        <button type="button" class="btn btn-danger btn-sm" data-delete-dkrule="${escapeHtml(r.id)}">Suppr.</button>
+                      </div>` : "—"}
+                    </td>
+                  </tr>`;
+              }).join("") : `<tr><td colspan="9" class="empty-state">Aucun flux inter-conteneurs pour ce filtre.</td></tr>`;
+            })()}
           </tbody>
         </table>
       </div>
@@ -899,6 +972,15 @@ async function renderDockerTab() {
     </section>
   `;
 
+  document.getElementById("docker-rule-search")?.addEventListener("input", (e) => {
+    window._dockerSearchQuery = e.target.value;
+    const pos = e.target.selectionStart;
+    renderDockerTab().then(() => {
+      const el = document.getElementById("docker-rule-search");
+      if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+    });
+  });
+
   if (canEdit) {
     document.getElementById("docker-networks-settings-form").addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -916,6 +998,29 @@ async function renderDockerTab() {
 
     const newBtn = document.getElementById("btn-new-docker-rule");
     if (newBtn) newBtn.addEventListener("click", () => showDockerRuleForm(null));
+
+    panel.querySelectorAll("[data-toggle-dkrule]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const rule = interRules.find((r) => r.id === btn.dataset.toggleDkrule);
+        if (!rule) return;
+        try {
+          await client.put("/api/firewall/docker-rules/" + rule.id, {
+            source_container: rule.source_container,
+            destination_container: rule.destination_container,
+            network_name: rule.network_name,
+            proto: rule.proto,
+            ports: rule.ports,
+            enabled: !rule.enabled,
+            comment: rule.comment || null,
+            sort_order: rule.sort_order ?? 0,
+          });
+          toast(rule.enabled ? "Flux désactivé" : "Flux activé", "success");
+          await renderDockerTab();
+        } catch (err) {
+          toast("Erreur bascule: " + err.message, "error");
+        }
+      });
+    });
 
     panel.querySelectorAll("[data-edit-dkrule]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -1165,7 +1270,10 @@ async function renderBlocklistsTab() {
     <section class="card">
       <div class="list-header">
         <h2>Listes de Blocage IP (<code>firewall.get.list</code>)</h2>
-        ${canEdit ? `<button type="button" id="btn-new-blocklist" class="btn btn-primary">+ Ajouter une Liste d'IPs</button>` : ""}
+        <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <input type="text" id="blocklist-search" class="input-field" style="width:220px;" placeholder="Filtrer nom, URL..." value="${escapeHtml(window._blocklistSearchQuery || "")}">
+          ${canEdit ? `<button type="button" id="btn-new-blocklist" class="btn btn-primary">+ Ajouter une Liste d'IPs</button>` : ""}
+        </div>
       </div>
       <p class="text-muted text-sm" style="margin-bottom:1rem;">
         Chaque entrée active génère un appel <code>generate_list "&lt;URL&gt;" "&lt;nom&gt;" &amp;</code>. Les flux nécessitant une authentification JSON complexe (comme AbuseIPDB) sont ingérés par <code>simply_ip_sync</code> et exposés en liste brute sans authentification par <code>simply_ip_exporter</code>.
@@ -1184,28 +1292,38 @@ async function renderBlocklistsTab() {
             </tr>
           </thead>
           <tbody>
-            ${data.items.length ? data.items.map((b) => `
-              <tr>
-                <td class="font-mono">${escapeHtml(b.name)}</td>
-                <td class="font-mono text-sm">${escapeHtml(b.url)}</td>
-                <td>${b.enabled ? `<span class="badge badge-running">OUI</span>` : `<span class="badge badge-stopped">NON</span>`}</td>
-                <td>
-                  ${b.last_test_ok === true
-                    ? `<span class="badge badge-running">OK (${b.last_test_entries || 0} IPs)</span>`
-                    : b.last_test_ok === false
-                    ? `<span class="badge badge-missing">ÉCHEC</span>`
-                    : `<span class="text-muted text-sm">Non testé</span>`}
-                </td>
-                <td class="text-muted text-sm">${escapeHtml(b.description || "—")}</td>
-                <td>
-                  ${canEdit ? `
-                    <button type="button" class="btn btn-secondary btn-sm" data-test-bl="${escapeHtml(b.id)}">Tester l'URL</button>
-                    <button type="button" class="btn btn-secondary btn-sm" data-edit-bl="${escapeHtml(b.id)}">Éditer</button>
-                    <button type="button" class="btn btn-danger btn-sm" data-delete-bl="${escapeHtml(b.id)}">Suppr.</button>
-                  ` : "—"}
-                </td>
-              </tr>
-            `).join("") : `<tr><td colspan="6" class="empty-state">Aucune blocklist configurée.</td></tr>`}
+            ${(() => {
+              const q = (window._blocklistSearchQuery || "").toLowerCase();
+              const visibleItems = q
+                ? data.items.filter((b) => `${b.name} ${b.url} ${b.description || ""}`.toLowerCase().includes(q))
+                : data.items;
+              return visibleItems.length ? visibleItems.map((b) => {
+                const toggleBadge = canEdit
+                  ? `<button type="button" class="badge badge-toggle ${b.enabled ? "badge-running" : "badge-stopped"}" data-toggle-bl="${escapeHtml(b.id)}" title="Cliquer pour activer/désactiver en 1 clic">${b.enabled ? "OUI" : "NON"}</button>`
+                  : (b.enabled ? `<span class="badge badge-running">OUI</span>` : `<span class="badge badge-stopped">NON</span>`);
+                return `
+                  <tr>
+                    <td class="font-mono">${escapeHtml(b.name)}</td>
+                    <td class="font-mono text-sm">${escapeHtml(b.url)}</td>
+                    <td>${toggleBadge}</td>
+                    <td>
+                      ${b.last_test_ok === true
+                        ? `<span class="badge badge-running">OK (${b.last_test_entries || 0} IPs)</span>`
+                        : b.last_test_ok === false
+                        ? `<span class="badge badge-missing">ÉCHEC</span>`
+                        : `<span class="text-muted text-sm">Non testé</span>`}
+                    </td>
+                    <td class="text-muted text-sm">${escapeHtml(b.description || "—")}</td>
+                    <td class="row-actions">
+                      ${canEdit ? `<div class="row-actions-group">
+                        <button type="button" class="btn btn-secondary btn-sm" data-test-bl="${escapeHtml(b.id)}">Tester l'URL</button>
+                        <button type="button" class="btn btn-secondary btn-sm" data-edit-bl="${escapeHtml(b.id)}">Éditer</button>
+                        <button type="button" class="btn btn-danger btn-sm" data-delete-bl="${escapeHtml(b.id)}">Suppr.</button>
+                      </div>` : "—"}
+                    </td>
+                  </tr>`;
+              }).join("") : `<tr><td colspan="6" class="empty-state">Aucune blocklist pour ce filtre.</td></tr>`;
+            })()}
           </tbody>
         </table>
       </div>
@@ -1217,9 +1335,38 @@ async function renderBlocklistsTab() {
     </section>
   `;
 
+  document.getElementById("blocklist-search")?.addEventListener("input", (e) => {
+    window._blocklistSearchQuery = e.target.value;
+    const pos = e.target.selectionStart;
+    renderBlocklistsTab().then(() => {
+      const el = document.getElementById("blocklist-search");
+      if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+    });
+  });
+
   if (canEdit) {
     const newBtn = document.getElementById("btn-new-blocklist");
     if (newBtn) newBtn.addEventListener("click", () => showBlocklistForm(null));
+
+    panel.querySelectorAll("[data-toggle-bl]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const item = data.items.find((x) => x.id === btn.dataset.toggleBl);
+        if (!item) return;
+        try {
+          await client.put(`/api/firewall/blocklists/${item.id}`, {
+            name: item.name,
+            url: item.url,
+            description: item.description || null,
+            enabled: !item.enabled,
+            sort_order: item.sort_order ?? 0,
+          });
+          toast(item.enabled ? "Blocklist désactivée" : "Blocklist activée", "success");
+          await renderBlocklistsTab();
+        } catch (err) {
+          toast("Erreur bascule: " + err.message, "error");
+        }
+      });
+    });
 
     panel.querySelectorAll("[data-test-bl]").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -1410,7 +1557,7 @@ async function renderDeployTab() {
       <pre class="code-preview">${escapeHtml(preview.firewall_rules_special)}</pre>
 
       <h3 style="margin-top:1.25rem;">3. <code>${escapeHtml(preview.output_dir)}/firewall.get.list</code></h3>
-      <pre class="code-preview">${escapeHtml(preview.firewall_get.list || preview.firewall_get_list)}</pre>
+      <pre class="code-preview">${escapeHtml(preview.firewall_get_list || "")}</pre>
     </section>
   `;
 
@@ -1567,7 +1714,7 @@ async function renderKeysTab() {
         if (!confirm("Rotate this API key? The previous key will stop working immediately.")) return;
         try {
           const res = await client.post(`/api/keys/${btn.dataset.rotateKey}/rotate`);
-          showIssuedSecretBanner("Rotated API Key", res.api_key, null);
+          showIssuedSecretBanner("Key Rotated", res.raw_key || res.plaintext_key || res.api_key, null);
           await renderKeysTab();
         } catch (err) {
           toast("Rotate failed: " + err.message, "error");
@@ -1603,18 +1750,18 @@ async function renderKeysTab() {
 }
 
 function keyScopes(k) {
-  if (k.is_master) return '<span class="badge badge-scope badge-scope-master">Master</span>';
   const scopes = [
-    k.can_manage_keys && "can_manage_keys",
-    k.can_manage_settings && "can_manage_settings",
-    k.can_manage_special_rules && "can_manage_special_rules",
-    k.can_manage_blocklists && "can_manage_blocklists",
-    k.can_deploy_and_reload && "can_deploy_and_reload",
+    k.is_master && "Master",
+    (k.is_master || k.can_manage_keys) && "can_manage_keys",
+    (k.is_master || k.can_manage_settings) && "can_manage_settings",
+    (k.is_master || k.can_manage_special_rules) && "can_manage_special_rules",
+    (k.is_master || k.can_manage_blocklists) && "can_manage_blocklists",
+    (k.is_master || k.can_deploy_and_reload) && "can_deploy_and_reload",
   ]
     .filter(Boolean)
     .map((s) => `<span class="badge badge-scope">${escapeHtml(s)}</span>`)
-    .join(" ");
-  return scopes || '<span class="text-muted text-sm">none</span>';
+    .join("");
+  return scopes ? `<div class="scope-badges">${scopes}</div>` : '<span class="text-muted text-sm">none</span>';
 }
 
 function renderKeyRow(k, canManage) {
@@ -1625,15 +1772,15 @@ function renderKeyRow(k, canManage) {
     <td><span class="badge badge-tier badge-tier-${tier.tier}">${escapeHtml(tier.label)}</span></td>
     <td>${keyScopes(k)}</td>
     <td class="font-mono text-sm">${escapeHtml(k.bound_ips || "any")}</td>
-    <td>
-      ${canManage ? `
-        <button type="button" class="btn btn-secondary btn-sm" data-edit-key="${escapeHtml(k.id)}">Edit</button>
+    <td class="row-actions">
+      ${canManage ? `<div class="row-actions-group">
+        <button type="button" class="btn btn-secondary btn-sm" data-edit-key="${escapeHtml(k.id)}">${k.is_master ? "Edit Bound IPs" : "Edit"}</button>
         ${!k.is_master ? `
           <button type="button" class="btn btn-secondary btn-sm" data-rotate-key="${escapeHtml(k.id)}">Rotate Key</button>
           <button type="button" class="btn btn-secondary btn-sm" data-rotate-secret="${escapeHtml(k.id)}">Rotate Secret</button>
           <button type="button" class="btn btn-danger btn-sm" data-delete-key="${escapeHtml(k.id)}">Delete</button>
         ` : ""}
-      ` : "—"}
+      </div>` : "—"}
     </td>
   </tr>`;
 }
