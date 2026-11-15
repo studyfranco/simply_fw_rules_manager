@@ -1562,25 +1562,13 @@
 # ==============================================================================
 # 7. Host Scripts Finalization & Summary
 # ==============================================================================
-- name: Finalize /etc/firewall/firewall.report with live Vault host URL and credentials
+- name: Finalize /etc/firewall/firewall.vault.conf with live Vault host URL and credentials
   ansible.builtin.template:
-    src: "{{ role_path }}/../firewall/templates/firewall.report.j2"
-    dest: "{{ firewall_dir }}/firewall.report"
+    src: "{{ role_path }}/../firewall/templates/firewall.vault.conf.j2"
+    dest: "{{ firewall_dir }}/firewall.vault.conf"
     owner: root
     group: root
-    mode: "0700"
-  when:
-    - effective_vault_api_key | length > 0
-    - effective_vault_signing_secret | length > 0
-  no_log: true
-
-- name: Finalize /etc/firewall/firewall.revoke.whitelist with live Vault host URL and credentials
-  ansible.builtin.template:
-    src: "{{ role_path }}/../firewall/templates/firewall.revoke.whitelist.j2"
-    dest: "{{ firewall_dir }}/firewall.revoke.whitelist"
-    owner: root
-    group: root
-    mode: "0700"
+    mode: "0600"
   when:
     - effective_vault_api_key | length > 0
     - effective_vault_signing_secret | length > 0

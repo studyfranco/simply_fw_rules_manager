@@ -4,8 +4,10 @@
 # Usage: firewall.launch.allow.ip <target_ip_or_cidr> [add|del] [cause] [ipset_base]
 # ==============================================================================
 
-FW_DIR="${FW_DIR:-/etc/firewall}"
-source "${FW_DIR}/firewall.settings"
+_SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+FW_DIR="${FW_DIR:-$(cd "$(dirname "${_SELF_PATH}")" && pwd)}"
+[ -f "${FW_DIR}/firewall.settings" ] && source "${FW_DIR}/firewall.settings"
+[ -f "${FW_DIR}/firewall.vault.conf" ] && source "${FW_DIR}/firewall.vault.conf"
 source "${FW_DIR}/firewall.tools"
 
 TARGET="$1"

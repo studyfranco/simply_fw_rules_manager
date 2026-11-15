@@ -1,0 +1,45 @@
+#!/bin/bash
+# ==============================================================================
+# Managed by Ansible: Vault & Firewall Script Runtime Configuration
+# Permissions: 0600 root:root (Secrets remain inaccessible to container UID 1128)
+# Note: Operational scripts live in scripts_etc/ and source this file at runtime.
+# ==============================================================================
+
+if [ -z "${FW_DIR:-}" ]; then
+    FW_DIR='{{ firewall_dir }}'
+fi
+if [ -z "${FIREWALL_WHITELIST_IPSET:-}" ]; then
+    FIREWALL_WHITELIST_IPSET='{{ firewall_whitelist_ipset_name | default("special_guest") }}'
+fi
+
+if [ -z "${VAULT_MODE:-}" ]; then
+    VAULT_MODE='{{ vault_mode }}'
+fi
+if [ -z "${VAULT_DOCKER_NET_ISOLATE:-}" ]; then
+    VAULT_DOCKER_NET_ISOLATE='{{ docker_net_isolate_name }}'
+fi
+if [ -z "${VAULT_DOCKER_NET_EXT:-}" ]; then
+    VAULT_DOCKER_NET_EXT='{{ docker_net_ext_name }}'
+fi
+if [ -z "${VAULT_PINNED_IPV4:-}" ]; then
+    VAULT_PINNED_IPV4='{{ docker_container_ips.simply_ip_vault.isolate_ipv4 if (docker_pin_container_ips | default(true) | bool) else "" }}'
+fi
+if [ -z "${VAULT_FALLBACK_URL:-}" ]; then
+    VAULT_FALLBACK_URL='{{ effective_vault_host_url | default("http://127.0.0.1:3000" if vault_mode == "local" else remote_vault_url) }}'
+fi
+
+if [ -z "${VAULT_API_KEY:-}" ]; then
+    VAULT_API_KEY='{{ effective_vault_api_key | default("") }}'
+fi
+if [ -z "${VAULT_SIGNING_SECRET:-}" ]; then
+    VAULT_SIGNING_SECRET='{{ effective_vault_signing_secret | default("") }}'
+fi
+if [ -z "${VAULT_BAN_GROUP:-}" ]; then
+    VAULT_BAN_GROUP='{{ vault_group_name | default("Main_Ban") }}'
+fi
+if [ -z "${VAULT_WHITELIST_GROUP:-}" ]; then
+    VAULT_WHITELIST_GROUP='{{ vault_whitelist_group_name | default("Main_Whitelist") }}'
+fi
+if [ -z "${VAULT_DELETE_HARD:-}" ]; then
+    VAULT_DELETE_HARD='{{ (white_list_vault_delete_hard | default(false) | bool) | ternary("true", "false") }}'
+fi

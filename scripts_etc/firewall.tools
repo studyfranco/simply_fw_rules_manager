@@ -371,6 +371,44 @@ vault_signed_call()
 	return 1
 }
 
+## @fn resolve_vault_url
+## @usage resolve_vault_url
+## @desc Résout l'URL HTTP de simply_ip_vault (override env, IP Docker isolate/ext live, IP épinglée ou fallback).
+resolve_vault_url()
+{
+	local resolved="${VAULT_URL:-${URL_API:-}}"
+	if [ -n "${resolved}" ]; then
+		echo "${resolved}"
+		return 0
+	fi
+
+	local vault_mode="${VAULT_MODE:-local}"
+	local net_iso="${VAULT_DOCKER_NET_ISOLATE:-isolate}"
+	local net_ext="${VAULT_DOCKER_NET_EXT:-ext}"
+	local pinned_v4="${VAULT_PINNED_IPV4:-}"
+	local fallback_url="${VAULT_FALLBACK_URL:-}"
+
+	if [ "${vault_mode}" = "local" ]; then
+		local vault_ip=""
+		vault_ip="$(get_container_ipv4_on_network "simply_ip_vault" "${net_iso}" 2>/dev/null || true)"
+		[ -z "${vault_ip}" ] && vault_ip="$(get_container_ipv4_on_network "simply_ip_vault" "${net_ext}" 2>/dev/null || true)"
+		if [ -n "${vault_ip}" ]; then
+			echo "http://${vault_ip}:3000"
+			return 0
+		elif [ -n "${pinned_v4}" ]; then
+			echo "http://${pinned_v4}:3000"
+			return 0
+		fi
+	fi
+
+	if [ -n "${fallback_url}" ]; then
+		echo "${fallback_url}"
+	elif [ "${vault_mode}" = "local" ]; then
+		echo "http://127.0.0.1:3000"
+	fi
+	return 0
+}
+
 ## @fn close_traffic_list
 ## @usage close_traffic_list "<args_src>" "<args_dst>" "${ips[@]}"
 ## @desc Ferme les connexions actives via ss (-K) pour une liste d'adresses IP.

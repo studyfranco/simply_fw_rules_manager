@@ -1,0 +1,42 @@
+#!/bin/bash
+# ==============================================================================
+# Simply Firewall Reporting Client to simply_ip_vault
+# Usage: firewall.report <target_ip> [cause]
+# ==============================================================================
+
+_SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+FW_DIR="${FW_DIR:-$(cd "$(dirname "${_SELF_PATH}")" && pwd)}"
+[ -f "${FW_DIR}/firewall.settings" ] && source "${FW_DIR}/firewall.settings"
+[ -f "${FW_DIR}/firewall.vault.conf" ] && source "${FW_DIR}/firewall.vault.conf"
+source "${FW_DIR}/firewall.tools"
+
+TARGET="${1:-}"
+CAUSE="${2:-Manual_Report}"
+
+URL_API="$(resolve_vault_url)"
+USER_KEY="${VAULT_API_KEY:-${USER_KEY:-}}"
+SECRET="${VAULT_SIGNING_SECRET:-${SECRET:-}}"
+GROUP_NAME="${VAULT_BAN_GROUP:-${GROUP_NAME:-Main_Ban}}"
+
+if [ -z "${URL_API}" ] || [ -z "${USER_KEY}" ] || [ -z "${SECRET}" ]; then
+	echo "simply_ip_vault credentials are not yet configured in ${FW_DIR}/firewall.vault.conf" >&2
+	exit 1
+fi
+
+if [ -z "${TARGET}" ]; then
+	echo "Usage: $0 <target_ip> [cause]" >&2
+	exit 1
+fi
+
+if ! ip addr show 2>/dev/null | grep -wq "${TARGET%/*}"; then
+	if is_ipv4 "${TARGET}" || is_ipv6 "${TARGET}" || is_ipv4_net "${TARGET}" || is_ipv6_net "${TARGET}"; then
+		PAYLOAD=$(${JQ:-/usr/bin/jq} -nc \
+			--arg target "${TARGET}" \
+			--arg grp "${GROUP_NAME}" \
+			--arg cause "${CAUSE}" \
+			'{target_address: $target, group_name: $grp, cause: $cause}')
+		vault_signed_call "${URL_API}" "${USER_KEY}" "${SECRET}" POST "/api/ban" "${PAYLOAD}" 10 5 0 || exit $?
+	fi
+fi
+
+exit 0

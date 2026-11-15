@@ -92,6 +92,9 @@ flowchart TD
 4. **Resilient Blocklist & Whitelist Fetching (`firewall.tools` & `firewall.set.ip`):**
    - `firewall.get.list` delegates downloads and aggregation to `generate_list`, `generate_whitelist`, and `finalize_blocklists` in `/etc/firewall/firewall.tools`.
    - Existing `.ip.4` / `.ip.6` banlist caches are preserved intact if an upstream download fails, while `generate_whitelist` treats valid HTTP 200 empty whitelist feeds as full revocation (`empty_removes_existing=1`) and syncs `to_allow.<ipset>.ipv4`/`.ipv6` atomically into ipsets (`good_ip` or `special_guest`) via `firewall.set.ip`.
+5. **Single Source of Truth in `scripts_etc/` + Isolated `firewall.vault.conf`:**
+   - All static/operational firewall scripts (`firewall`, `firewall.tools`, `firewall.set.ip`, `firewall.report`, `firewall.launch.block.ip`, `firewall.launch.allow.ip`, `firewall.revoke.whitelist`, `firewall.clean.block.ip`) live exclusively in `scripts_etc/` and are deployed directly by Ansible via `ansible.builtin.copy` (zero duplicate `.j2` script copies).
+   - Host-specific Vault endpoints, HMAC credentials, and whitelist runtime parameters (`VAULT_API_KEY`, `VAULT_SIGNING_SECRET`, `FIREWALL_WHITELIST_IPSET`, `VAULT_*_GROUP`, etc.) are kept separate in `/etc/firewall/firewall.vault.conf` (`0600 root:root`, inaccessible to container UID `1128`), which the `scripts_etc/` scripts source automatically relative to their own location.
 
 ---
 

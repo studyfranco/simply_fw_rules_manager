@@ -61,45 +61,29 @@
     mode: "0700"
     force: false
 
-- name: Deploy firewall.report HMAC reporting client
+- name: Deploy initial firewall.vault.conf runtime Vault and whitelist settings
   ansible.builtin.template:
-    src: firewall.report.j2
-    dest: "{{ firewall_dir }}/firewall.report"
+    src: firewall.vault.conf.j2
+    dest: "{{ firewall_dir }}/firewall.vault.conf"
     owner: root
     group: root
-    mode: "0700"
+    mode: "0600"
+    force: false # Updated with live Vault credentials by vault_integration
+  no_log: true
 
-- name: Deploy firewall.launch.block.ip fast block runner
-  ansible.builtin.template:
-    src: firewall.launch.block.ip.j2
-    dest: "{{ firewall_dir }}/firewall.launch.block.ip"
+- name: Deploy static firewall scripts from scripts_etc
+  ansible.builtin.copy:
+    src: "{{ firewall_scripts_src_dir | default(role_path ~ '/../../../scripts_etc') }}/{{ item.src }}"
+    dest: "{{ firewall_dir }}/{{ item.src }}"
     owner: root
     group: root
-    mode: "0700"
-
-- name: Deploy firewall.launch.allow.ip fast whitelist runner
-  ansible.builtin.template:
-    src: firewall.launch.allow.ip.j2
-    dest: "{{ firewall_dir }}/firewall.launch.allow.ip"
-    owner: root
-    group: root
-    mode: "0700"
-
-- name: Deploy firewall.revoke.whitelist emergency revocation CLI
-  ansible.builtin.template:
-    src: firewall.revoke.whitelist.j2
-    dest: "{{ firewall_dir }}/firewall.revoke.whitelist"
-    owner: root
-    group: root
-    mode: "0700"
-
-- name: Deploy firewall.clean.block.ip cleanup script
-  ansible.builtin.template:
-    src: firewall.clean.block.ip.j2
-    dest: "{{ firewall_dir }}/firewall.clean.block.ip"
-    owner: root
-    group: root
-    mode: "0700"
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: "firewall.report", mode: "0700" }
+    - { src: "firewall.launch.block.ip", mode: "0700" }
+    - { src: "firewall.launch.allow.ip", mode: "0700" }
+    - { src: "firewall.revoke.whitelist", mode: "0700" }
+    - { src: "firewall.clean.block.ip", mode: "0700" }
 
 - name: Ensure blocklist and whitelist record files exist with restricted permissions
   ansible.builtin.file:
