@@ -211,8 +211,7 @@ add_ipblock()
 
 add_ipblock_actions()
 {
-	nice -n 100 $DUMPCO -k src $1 > /dev/null 2>&1 &
-	nice -n 100 $DUMPCO -k dst $1 > /dev/null 2>&1 &
+	kill_active_connections "inet" "$1"
 	wait
 	return 0
 }
@@ -251,8 +250,7 @@ add_ipblock6()
 
 add_ipblock6_actions()
 {
-	nice -n 100 $DUMPCO -6 -k src $1 > /dev/null 2>&1 &
-	nice -n 100 $DUMPCO -6 -k dst $1 > /dev/null 2>&1 &
+	kill_active_connections "inet6" "$1"
 	wait
 	return 0
 }

@@ -41,18 +41,7 @@ fi
 
 call() {
     local method="$1" path="$2" body="${3:-}"
-    local ts
-    ts=$(date -u +%s)
-    # CANONICAL_V1: real newlines between the four fields, none at the end.
-    local sig
-    sig=$(printf '%s\n%s\n%s\n%s' "$method" "${path%%\?*}" "$ts" "$body" \
-          | openssl dgst -sha256 -hmac "${SECRET}" | sed 's/^.*= //')
-    curl --retry 5 --retry-delay 3 --retry-connrefused -sS -X "$method" \
-        -H "X-API-Key: ${USER_KEY}" \
-        -H "X-Timestamp: $ts" \
-        -H "X-Signature-256: sha256=${sig}" \
-        ${body:+-H "Content-Type: application/json" -d "$body"} \
-        "${URL_API}${path}"
+    vault_signed_call "${URL_API}" "${USER_KEY}" "${SECRET}" "${method}" "${path}" "${body}" 10 5 0
 }
 
 if ! ip addr show | grep -wq "${TARGET%/*}"; then
@@ -62,7 +51,7 @@ if ! ip addr show | grep -wq "${TARGET%/*}"; then
             --arg grp "$GROUP_NAME" \
             --arg cause "$CAUSE" \
             '{target_address: $target, group_name: $grp, cause: $cause}')
-        call POST /api/ban "$PAYLOAD"
+        call POST /api/ban "$PAYLOAD" || exit $?
     fi
 fi
 

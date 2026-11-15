@@ -29,6 +29,7 @@ common_packages:
   - "rsync"
   - "pigz"
   - "openssl"
+  - "conntrack"
 
 # Dedicated Unprivileged Hook Executor User
 hookexecutor_user: "hookexecutor"
@@ -169,6 +170,7 @@ vault_whitelist_group_name: "Main_Whitelist"
 # Target ipset for live whitelist hooks and exporter pulls ("special_guest" for country-open access via firewall.rules.special, "good_ip" for full admin bypass, or custom set)
 firewall_whitelist_ipset_name: "special_guest"
 vault_whitelist_webhook_url: ""
+vault_whitelist_revoke_webhook_url: ""
 
 # simply_white_list Runtime Policy (used when deploy_simply_white_list is true)
 white_list_vault_delete_hard: false
@@ -193,6 +195,7 @@ exporter_filter_rfc1918: true
 exporter_filter_bogons: true
 exporter_filter_loopback: true
 exporter_whitelist_endpoint_name: "Firewall Whitelist"
+exporter_whitelist_ttl_seconds: 15
 exporter_whitelist_filter_rfc1918: false
 exporter_whitelist_filter_bogons: true
 exporter_whitelist_filter_loopback: true
@@ -204,11 +207,13 @@ hook_ssh_target_name: "local-host"
 hook_name_report: "firewall-report"
 hook_name_block: "firewall-block-ip"
 hook_name_allow: "firewall-allow-ip"
+hook_name_revoke: "firewall-revoke-ip"
 hook_name_reload: "firewall-reload"
 hook_name_update_containers: "docker-update-containers"
 hook_id_report: ""
 hook_id_block: ""
 hook_id_allow: ""
+hook_id_revoke: ""
 hook_id_reload: ""
 hook_id_update_containers: ""
 hook_executor_api_key: ""

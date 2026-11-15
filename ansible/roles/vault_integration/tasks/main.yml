@@ -461,10 +461,11 @@
         "$PARAMS_BLOCK_CAUSE")
 
       H_ID_ALLOW=""
+      H_ID_REVOKE=""
       if [ "$CONFIGURE_WL" = "true" ]; then
         PARAMS_ALLOW=$(jq -nc --arg wlset "$WL_IPSET" '[
           {"param_key":"target_ip","description":"IPv4/IPv6 address or CIDR to whitelist or revoke","is_required":true},
-          {"param_key":"action","description":"Operation: add or del","default_value":"add","is_required":false},
+          {"param_key":"action","description":"Operation: add, del, or ban","default_value":"add","is_required":false},
           {"param_key":"cause","description":"Whitelist grant note or reason","default_value":"whitelist","is_required":false},
           {"param_key":"ipset","description":"Target host ipset base name (e.g. special_guest or good_ip)","default_value":$wlset,"is_required":false}
         ]')
@@ -477,6 +478,22 @@
           '${target_ip} ${action} ${cause} ${ipset}' \
           "$SAMPLE_ALLOW" \
           "$PARAMS_ALLOW")
+
+        PARAMS_REVOKE=$(jq -nc --arg wlset "$WL_IPSET" '[
+          {"param_key":"target_ip","description":"IPv4/IPv6 address or CIDR to immediately revoke from whitelist","is_required":true},
+          {"param_key":"mode","description":"Revocation mode: del (revoke only) or ban (revoke + kill + block)","default_value":"del","is_required":false},
+          {"param_key":"cause","description":"Whitelist revocation or abuse reason","default_value":"whitelist-revoke","is_required":false},
+          {"param_key":"ipset","description":"Target host ipset base name (or all to purge every whitelist set)","default_value":$wlset,"is_required":false}
+        ]')
+        SAMPLE_REVOKE=$(jq -nc --arg wlset "$WL_IPSET" '{"target_ip":"203.0.113.20","mode":"del","cause":"whitelist-revoke","ipset":$wlset}')
+        H_ID_REVOKE=$(ensure_ssh_hook \
+          "{{ hook_name_revoke }}" \
+          "Immediately revoke whitelisted IP/CIDR, kill active connections, and optionally ban" \
+          "{{ firewall_dir }}/firewall.launch.allow.ip" \
+          30 \
+          '${target_ip} ${mode} ${cause} ${ipset}' \
+          "$SAMPLE_REVOKE" \
+          "$PARAMS_REVOKE")
       fi
 
       H_ID_RELOAD=$(ensure_ssh_hook \
@@ -577,7 +594,7 @@
         VAULT_HOOKS_CSV=""
         [ "$ENABLE_BAN_WH" = "true" ] && VAULT_HOOKS_CSV="{{ hook_name_block }}"
         if [ "$CONFIGURE_WL" = "true" ]; then
-          VAULT_HOOKS_CSV="${VAULT_HOOKS_CSV:+${VAULT_HOOKS_CSV},}{{ hook_name_allow }}"
+          VAULT_HOOKS_CSV="${VAULT_HOOKS_CSV:+${VAULT_HOOKS_CSV},}{{ hook_name_allow }},{{ hook_name_revoke }}"
         fi
         if [ "$(ensure_key_with_grants \
           "vault-ban-webhook" "true" \
@@ -593,6 +610,7 @@
         --arg r "$H_ID_REPORT" \
         --arg b "$H_ID_BLOCK" \
         --arg a "$H_ID_ALLOW" \
+        --arg rv "$H_ID_REVOKE" \
         --arg l "$H_ID_RELOAD" \
         --arg u "$H_ID_UPDATE" \
         --argjson fwc "$FW_SECRETS_CHANGED" \
@@ -602,6 +620,7 @@
           hook_id_report: $r,
           hook_id_block: $b,
           hook_id_allow: $a,
+          hook_id_revoke: $rv,
           hook_id_reload: $l,
           hook_id_update_containers: $u,
           fw_secrets_changed: $fwc,
@@ -623,6 +642,7 @@
     hook_id_report: "{{ (hook_provision_raw.stdout | default('{}', true) | from_json).hook_id_report | default(hook_name_report, true) }}"
     hook_id_block: "{{ (hook_provision_raw.stdout | default('{}', true) | from_json).hook_id_block | default(hook_name_block, true) }}"
     hook_id_allow: "{{ (hook_provision_raw.stdout | default('{}', true) | from_json).hook_id_allow | default(hook_name_allow, true) }}"
+    hook_id_revoke: "{{ (hook_provision_raw.stdout | default('{}', true) | from_json).hook_id_revoke | default(hook_name_revoke, true) }}"
     hook_id_reload: "{{ (hook_provision_raw.stdout | default('{}', true) | from_json).hook_id_reload | default(hook_name_reload, true) }}"
     hook_id_update_containers: "{{ (hook_provision_raw.stdout | default('{}', true) | from_json).hook_id_update_containers | default(hook_name_update_containers, true) }}"
   when:
@@ -772,6 +792,10 @@
       BAN_WH_URL="{{ vault_ban_webhook_url | default('http://simply_hook_executor:3000/webhook/' ~ hook_name_block, true) }}"
       ENABLE_WL_WH="{{ 'true' if (effective_configure_vault_whitelist | bool and (vault_mode == 'local' or (vault_whitelist_webhook_url | default('') | length > 0))) else 'false' }}"
       WL_WH_URL="{{ vault_whitelist_webhook_url | default('http://simply_hook_executor:3000/webhook/' ~ hook_name_allow, true) }}"
+      WL_REVOKE_WH_URL="{{ vault_whitelist_revoke_webhook_url | default('http://simply_hook_executor:3000/webhook/' ~ hook_name_revoke, true) }}"
+      if [ "$VAULT_MODE" = "remote" ] && [ -z "{{ vault_whitelist_revoke_webhook_url | default('') }}" ]; then
+        WL_REVOKE_WH_URL="${WL_WH_URL%/*}/{{ hook_name_revoke }}"
+      fi
       FORCE_BAN_WH="{{ 'true' if ((_hook_prov.vault_ban_key_changed | default(false)) | bool) else 'false' }}"
       SECRETS_DIR="{{ firewall_secrets_dir }}"
       BAN_AK_FILE="${SECRETS_DIR}/vault_ban_hook_api_key.txt"
@@ -941,7 +965,7 @@
         WL_ALLOW_TPL=$(jq -nc --arg ipset "$WL_IPSET" \
           '{target_ip: "$target_address", action: "add", cause: "$cause", ipset: $ipset}')
         WL_REVOKE_TPL=$(jq -nc --arg ipset "$WL_IPSET" \
-          '{target_ip: "$target_address", action: "del", cause: "$cause", ipset: $ipset}')
+          '{target_ip: "$target_address", mode: "del", cause: "$cause", ipset: $ipset}')
 
         upsert_webhook \
           "Whitelist Allow" \
@@ -958,7 +982,7 @@
 
         upsert_webhook \
           "Whitelist Revoke" \
-          "$WL_WH_URL" \
+          "$WL_REVOKE_WH_URL" \
           "$WL_GROUP_ID" \
           "IP_DELETE" \
           "CANONICAL_V1" \
@@ -1295,7 +1319,7 @@
             WL_FEED_PATH=$(ensure_exporter_endpoint \
               "{{ exporter_whitelist_endpoint_name }}" \
               "{{ vault_whitelist_group_name }}" \
-              "{{ exporter_endpoint_ttl_seconds | int }}" \
+              "{{ exporter_whitelist_ttl_seconds | default(15) | int }}" \
               "{{ exporter_endpoint_max_age_seconds | int }}" \
               "{{ exporter_whitelist_filter_rfc1918 | bool | ternary('true', 'false') }}" \
               "{{ exporter_whitelist_filter_bogons | bool | ternary('true', 'false') }}" \
@@ -1550,6 +1574,18 @@
     - effective_vault_signing_secret | length > 0
   no_log: true
 
+- name: Finalize /etc/firewall/firewall.revoke.whitelist with live Vault host URL and credentials
+  ansible.builtin.template:
+    src: "{{ role_path }}/../firewall/templates/firewall.revoke.whitelist.j2"
+    dest: "{{ firewall_dir }}/firewall.revoke.whitelist"
+    owner: root
+    group: root
+    mode: "0700"
+  when:
+    - effective_vault_api_key | length > 0
+    - effective_vault_signing_secret | length > 0
+  no_log: true
+
 - name: Display Vault integration and peering summary
   ansible.builtin.debug:
     msg:
@@ -1562,15 +1598,16 @@
       - "AbuseIPDB Integration (send_normalized_ipv6=false): {{ 'Enabled' if (abuseipdb_api_key | default('') | length > 0) else 'Skipped (no API key provided)' }}"
       - "Simply White List Service: {{ ('Enabled (host http://127.0.0.1:3005 -> isolate:3004)') if (deploy_simply_white_list | bool) else 'Disabled (deploy_simply_white_list=false)' }}"
       - "Vault Whitelist Group & Target ipset: {{ (vault_whitelist_group_name ~ ' -> ' ~ (firewall_whitelist_ipset_name | default('special_guest'))) if (effective_configure_vault_whitelist | bool or (deploy_simply_white_list | bool)) else 'Disabled' }}"
-      - "Whitelist Webhooks (Allow + Revoke, send_normalized_ipv6=false): {{ 'Enabled' if (effective_configure_vault_whitelist | bool and (vault_mode == 'local' or (vault_whitelist_webhook_url | default('') | length > 0))) else 'Skipped' }}"
+      - "Whitelist Webhooks (Allow + dedicated Revoke, send_normalized_ipv6=false): {{ 'Enabled' if (effective_configure_vault_whitelist | bool and (vault_mode == 'local' or (vault_whitelist_webhook_url | default('') | length > 0))) else 'Skipped' }}"
       - "Simply IP Exporter Banlist Feed URL: {{ effective_exporter_feed_url if (effective_exporter_feed_url | default('') | length > 0) else 'Disabled (deploy_simply_ip_exporter=false)' }}"
-      - "Simply IP Exporter Whitelist Feed URL: {{ effective_whitelist_feed_url if (effective_whitelist_feed_url | default('') | length > 0) else 'Disabled' }}"
+      - "Simply IP Exporter Whitelist Feed URL (TTL {{ exporter_whitelist_ttl_seconds | default(15) }}s): {{ effective_whitelist_feed_url if (effective_whitelist_feed_url | default('') | length > 0) else 'Disabled' }}"
       - "Simply IP Sync Feeds Configured: {{ 'Yes (Problematics IPS + VPN)' if (deploy_simply_ip_sync | bool) else 'No (deploy_simply_ip_sync=false)' }}"
       - "Compose 'ext' Network Exposure: {{ 'hook_executor=' ~ (hook_executor_allow_ext_network | bool | string) ~ ', ip_vault=' ~ (vault_allow_ext_network | bool | string) ~ ', white_list=' ~ (white_list_allow_ext_network | bool | string) ~ ' (fw_rules_manager & ip_exporter strictly isolate-only)' }}"
       - "Hook Executor Host SSH Target: {{ docker_gateway_isolate_ip }}:{{ effective_sshd_port }}"
       - "Hook Report ID: {{ hook_id_report | default('N/A') }}"
       - "Hook Block ID: {{ hook_id_block | default('N/A') }}"
       - "Hook Allow ID: {{ hook_id_allow | default('N/A') }}"
+      - "Hook Revoke ID: {{ hook_id_revoke | default('N/A') }}"
       - "Hook Reload ID: {{ hook_id_reload | default('N/A') }}"
       - "Hook Update Containers ID: {{ hook_id_update_containers | default('N/A') }}"
 

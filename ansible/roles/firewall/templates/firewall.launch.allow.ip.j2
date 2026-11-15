@@ -20,8 +20,12 @@ if [ -z "${TARGET}" ]; then
     exit 1
 fi
 
-if [ "${ACTION}" != "add" ] && [ "${ACTION}" != "del" ]; then
-    echo "Invalid action '${ACTION}': expected 'add' or 'del'" >&2
+if [ "${ACTION}" != "add" ] && [ "${ACTION}" != "del" ] && [ "${ACTION}" != "ban" ]; then
+    echo "Invalid action '${ACTION}': expected 'add', 'del', or 'ban'" >&2
+    exit 1
+fi
+if [ "${ACTION}" = "add" ] && [ "${TARGET_SET}" = "all" ]; then
+    echo "Invalid ipset '${TARGET_SET}' for action 'add': specify a concrete ipset" >&2
     exit 1
 fi
 
@@ -52,6 +56,119 @@ remove_exact_line() {
     local tmp_file
     tmp_file=$(mktemp "${file}.XXXXXX") || return 1
     awk -v target="${needle}" '$0 != target' "${file}" > "${tmp_file}" && mv "${tmp_file}" "${file}"
+}
+
+strip_host_cidr() {
+    local val="$1"
+    local family="$2"
+    if [ "${family}" = "inet" ]; then
+        echo "${val%/32}"
+    else
+        echo "${val%/128}"
+    fi
+}
+
+canonical_target_variants() {
+    local val="$1"
+    local family="$2"
+    local clean
+    clean=$(strip_host_cidr "${val}" "${family}")
+    echo "${clean}"
+    if [ "${family}" = "inet" ] && is_ipv4 "${clean}"; then
+        echo "${clean}/32"
+    elif [ "${family}" = "inet6" ] && is_ipv6 "${clean}"; then
+        echo "${clean}/128"
+    fi
+}
+
+remove_matching_lines() {
+    local file="$1"
+    shift
+    [ -f "${file}" ] || return 0
+    local variant
+    for variant in "$@"; do
+        remove_exact_line "${file}" "${variant}"
+    done
+}
+
+discover_allow_sets() {
+    local default_set="$1"
+    local seen=" "
+    local candidates=("${default_set}" "${GOOD_BASE}")
+    local f fname base
+
+    shopt -s nullglob
+    for f in "${FW_DIR}"/firewall.allow.*.ip "${FW_DIR}"/firewall.allow.*.ip6; do
+        fname=$(basename "${f}")
+        base="${fname#firewall.allow.}"
+        base="${base%.ip6}"
+        base="${base%.ip}"
+        if [ -n "${base}" ] && [ "${fname}" != "firewall.allow.ip" ] && [ "${fname}" != "firewall.allow.ip6" ]; then
+            candidates+=("${base}")
+        fi
+    done
+    for f in "${FW_DIR}"/to_allow.*.ipv4 "${FW_DIR}"/to_allow.*.ipv6; do
+        fname=$(basename "${f}")
+        base="${fname#to_allow.}"
+        base="${base%.ipv4}"
+        base="${base%.ipv6}"
+        if [ -n "${base}" ] && [ "${fname}" != "to_allow.ipv4" ] && [ "${fname}" != "to_allow.ipv6" ]; then
+            candidates+=("${base}")
+        fi
+    done
+    shopt -u nullglob
+
+    for base in "${candidates[@]}"; do
+        [ -n "${base}" ] || continue
+        case "${seen}" in
+            *" ${base} "*) ;;
+            *)
+                seen="${seen}${base} "
+                echo "${base}"
+                ;;
+        esac
+    done
+}
+
+revoke_from_set() {
+    local base_set="$1"
+    local family="$2"
+    local clean_target="$3"
+    shift 3
+    local variants=("$@")
+    local set_name allow_file feed_allow_file variant
+
+    if [ "${base_set}" = "${GOOD_BASE}" ] && is_local_or_static_aut "${clean_target}"; then
+        echo "Refusing to remove local or IPAutor address '${clean_target}' from ${GOOD_BASE}" >&2
+        return 10
+    fi
+
+    if [ "${family}" = "inet" ]; then
+        set_name="${base_set}"
+        allow_file="${FW_DIR}/firewall.allow.${base_set}.ip"
+        feed_allow_file="${FW_DIR}/to_allow.${base_set}.ipv4"
+    else
+        set_name="${base_set}6"
+        allow_file="${FW_DIR}/firewall.allow.${base_set}.ip6"
+        feed_allow_file="${FW_DIR}/to_allow.${base_set}.ipv6"
+    fi
+
+    for variant in "${variants[@]}"; do
+        $IPS del "${set_name}" "${variant}" 2>/dev/null || true
+    done
+    remove_matching_lines "${allow_file}" "${variants[@]}"
+    remove_matching_lines "${feed_allow_file}" "${variants[@]}"
+
+    if [ "${base_set}" = "${GOOD_BASE}" ]; then
+        if [ "${FAMILY}" = "inet" ]; then
+            remove_matching_lines "${FW_DIR}/firewall.allow.ip" "${variants[@]}"
+            remove_matching_lines "${FW_DIR}/to_allow.ipv4" "${variants[@]}"
+        else
+            remove_matching_lines "${FW_DIR}/firewall.allow.ip6" "${variants[@]}"
+            remove_matching_lines "${FW_DIR}/to_allow.ipv6" "${variants[@]}"
+        fi
+    fi
+    return 0
 }
 
 FAMILY=""
@@ -107,20 +224,37 @@ if [ "${ACTION}" = "add" ]; then
         fi
     fi
 else
-    if [ "${TARGET_SET}" = "${GOOD_BASE}" ] && is_local_or_static_aut "${TARGET}"; then
-        echo "Refusing to remove local or IPAutor address '${TARGET}' from ${GOOD_BASE}" >&2
+    TARGET_CLEAN=$(strip_host_cidr "${TARGET}" "${FAMILY}")
+    if [ "${ACTION}" = "ban" ] && is_local_or_static_aut "${TARGET_CLEAN}"; then
+        echo "Refusing to ban local or IPAutor address '${TARGET_CLEAN}'" >&2
         exit 0
     fi
-    $IPS del "${SET_NAME}" "${TARGET}" 2>/dev/null || true
-    remove_exact_line "${ALLOW_FILE}" "${TARGET}"
-    remove_exact_line "${FEED_ALLOW_FILE}" "${TARGET}"
-    if [ "${TARGET_SET}" = "${GOOD_BASE}" ]; then
-        if [ "${FAMILY}" = "inet" ]; then
-            remove_exact_line "${FW_DIR}/firewall.allow.ip" "${TARGET}"
-        else
-            remove_exact_line "${FW_DIR}/firewall.allow.ip6" "${TARGET}"
+
+    TARGET_VARIANTS=()
+    while IFS= read -r _variant; do
+        [ -n "${_variant}" ] && TARGET_VARIANTS+=("${_variant}")
+    done < <(canonical_target_variants "${TARGET}" "${FAMILY}")
+
+    if [ "${TARGET_SET}" = "all" ] || [ "${ACTION}" = "ban" ]; then
+        _default_set="${FIREWALL_WHITELIST_IPSET:-${DEFAULT_TARGET_SET}}"
+        [ "${TARGET_SET}" != "all" ] && _default_set="${TARGET_SET}"
+        while IFS= read -r _base_set; do
+            [ -n "${_base_set}" ] || continue
+            revoke_from_set "${_base_set}" "${FAMILY}" "${TARGET_CLEAN}" "${TARGET_VARIANTS[@]}" || true
+        done < <(discover_allow_sets "${_default_set}")
+    else
+        revoke_from_set "${TARGET_SET}" "${FAMILY}" "${TARGET_CLEAN}" "${TARGET_VARIANTS[@]}"
+        _rc=$?
+        if [ "${_rc}" -eq 10 ]; then
+            exit 0
         fi
     fi
+
+    kill_active_connections "${FAMILY}" "${TARGET_CLEAN}"
+    if [ "${ACTION}" = "ban" ] && [ -x "${FW_DIR}/firewall.launch.block.ip" ]; then
+        "${FW_DIR}/firewall.launch.block.ip" "${TARGET_CLEAN}" "${CAUSE}"
+    fi
+    wait
 fi
 
 wait

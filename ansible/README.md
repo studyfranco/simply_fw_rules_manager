@@ -14,7 +14,8 @@ flowchart TD
         PS["Portsentry (Root)"]
         FWS["/etc/firewall/firewall.report (0700)"]
         FWB["/etc/firewall/firewall.launch.block.ip (sudo)"]
-        FWA["/etc/firewall/firewall.launch.allow.ip (sudo -> special_guest)"]
+        FWA["/etc/firewall/firewall.launch.allow.ip (add | del | ban + ss -K / conntrack)"]
+        FWREV["/etc/firewall/firewall.revoke.whitelist (emergency CLI -> kernel + Vault)"]
         FWR["/etc/firewall/firewall reload (sudo)"]
         SSHD["SSHD (hookexecutor user on 10.123.0.1)"]
         SD1["Systemd: firewall.service (boot)"]
@@ -52,7 +53,10 @@ flowchart TD
     FWS -->|"CANONICAL_V1 POST /api/ban (unit IPv4/IPv6)"| SIV
     SWL -->|"Daughter API key (Main_Whitelist only)"| SIV
     SIV -->|"Webhook Firewall Block (send_normalized_ipv6=true => /48)"| SHE
-    SIV -->|"Webhooks Whitelist Allow/Revoke (send_normalized_ipv6=false => exact IP)"| SHE
+    SIV -->|"Webhook Whitelist Allow -> firewall-allow-ip (send_normalized_ipv6=false)"| SHE
+    SIV -->|"Webhook Whitelist Revoke -> firewall-revoke-ip (send_normalized_ipv6=false)"| SHE
+    FWREV -->|"1. Immediate del/ban + ss -K/conntrack"| FWA
+    FWREV -->|"2. CANONICAL_V1 DELETE /api/ips (+ /api/ban on --ban)"| SIV
     SIV -.->|"Webhook AbuseIPDB Report (requires vault_allow_ext_network=true)"| ABUSE
     SIS -->|"Sync Public Feeds + Optional AbuseIPDB"| SIV
     SIE -->|"Fetch Banlist + Whitelist Groups via CANONICAL_V1 API"| SIV
@@ -83,7 +87,8 @@ flowchart TD
    - `simply_ip_vault` runtime setting `normalize_ipv6_to_48` (default `true`, synced via `PUT /api/settings`) stores bare host IPv6 attackers normalized as `/48` while keeping exact addresses available for webhook dispatch:
      - `Firewall Block` webhook (`send_normalized_ipv6: true`, `CANONICAL_V1`) dispatches the `/48` network to `simply_hook_executor` (`firewall-block-ip` -> `/etc/firewall/firewall.launch.block.ip`), which handles both bare IPv6 and IPv6 CIDRs (`is_ipv6_net`) without duplicating `/48`.
      - `AbuseIPDB Report` webhook (`send_normalized_ipv6: false`, configured automatically when `abuseipdb_api_key` is provided) sends the exact unit IPv6 so AbuseIPDB does not reject CIDRs with `422 Unprocessable Entity`.
-     - Optional `simply_white_list` + Vault whitelist orchestration creates a `whitelist`-typed Vault group (`vault_whitelist_group_name`, default `Main_Whitelist`), provisions a least-privilege Daughter key scoped strictly to that group, attaches `Whitelist Allow` (`IP_ADD,IP_UPDATE`) & `Whitelist Revoke` (`IP_DELETE`) webhooks with `send_normalized_ipv6: false` calling `/etc/firewall/firewall.launch.allow.ip`, and targets `firewall_whitelist_ipset_name` (`special_guest` by default via `firewall.rules.special` for country-open access without granting `good_ip` admin bypass).
+     - Optional `simply_white_list` + Vault whitelist orchestration creates a `whitelist`-typed Vault group (`vault_whitelist_group_name`, default `Main_Whitelist`), provisions a least-privilege Daughter key scoped strictly to that group, attaches `Whitelist Allow` (`IP_ADD,IP_UPDATE` -> `firewall-allow-ip`) & dedicated `Whitelist Revoke` (`IP_DELETE` -> `firewall-revoke-ip`, `mode` defaulting to `del`, `add` disallowed) webhooks with `send_normalized_ipv6: false` calling `/etc/firewall/firewall.launch.allow.ip`, and targets `firewall_whitelist_ipset_name` (`special_guest` by default via `firewall.rules.special` for country-open access without granting `good_ip` admin bypass).
+     - **Fast Whitelist Deletion Stack:** `firewall.launch.allow.ip` supports `add | del | ban` (plus `ipset="all"` on `del`/`ban` to purge across `special_guest`, `good_ip`, and any `firewall.allow.*`/`to_allow.*` files while protecting `IPAutor` & local host IPs), normalizes `/32` & `/128` variants, and terminates established connections immediately via shared `kill_active_connections` (`ss -K` with bracketed IPv6 + `conntrack -D`, bypassing `ESTABLISHED,RELATED` rules). `/etc/firewall/firewall.revoke.whitelist <ip> [cause] [ipset|all] [--ban]` executes immediate kernel cutoff first and then synchronizes `DELETE /api/ips` (+ `POST /api/ban` on `--ban`) to `simply_ip_vault`, while `exporter_whitelist_ttl_seconds` (`15s`) keeps exporter caches short-lived.
 4. **Resilient Blocklist & Whitelist Fetching (`firewall.tools` & `firewall.set.ip`):**
    - `firewall.get.list` delegates downloads and aggregation to `generate_list`, `generate_whitelist`, and `finalize_blocklists` in `/etc/firewall/firewall.tools`.
    - Existing `.ip.4` / `.ip.6` banlist caches are preserved intact if an upstream download fails, while `generate_whitelist` treats valid HTTP 200 empty whitelist feeds as full revocation (`empty_removes_existing=1`) and syncs `to_allow.<ipset>.ipv4`/`.ipv6` atomically into ipsets (`good_ip` or `special_guest`) via `firewall.set.ip`.
@@ -97,7 +102,7 @@ flowchart TD
 | Service | Host Loopback (`localDockerTCP`) | Pinned `isolate` IPv4 / IPv6 | `ext` Network & Pinned IPv4 / IPv6 | Port (`expose`) | Purpose |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **`simply_fw_rules_manager`** | `127.0.0.1:3004` | `10.123.250.10` / `fd10:1993:1000:1199::2:fa10` | `— (isolate-only)` | `3000` | Firewall configuration & rule deployment UI/API |
-| **`simply_hook_executor`** | `127.0.0.1:3001` | `10.123.250.11` / `fd10:1993:1000:1199::2:fa11` | `10.124.250.11` / `fd10:1993:1000:1199::1:fa11` *(opt)* | `3000` | SSH/local hook runner (`firewall-report`, `firewall-block-ip`, `firewall-allow-ip`, `firewall-reload`, `docker-update-containers`) |
+| **`simply_hook_executor`** | `127.0.0.1:3001` | `10.123.250.11` / `fd10:1993:1000:1199::2:fa11` | `10.124.250.11` / `fd10:1993:1000:1199::1:fa11` *(opt)* | `3000` | SSH/local hook runner (`firewall-report`, `firewall-block-ip`, `firewall-allow-ip`, `firewall-revoke-ip`, `firewall-reload`, `docker-update-containers`) |
 | **`simply_ip_vault`** | `127.0.0.1:3000` | `10.123.250.12` / `fd10:1993:1000:1199::2:fa12` | `10.124.250.12` / `fd10:1993:1000:1199::1:fa12` *(opt)* | `3000` | Central IP banlist/whitelist Vault & webhook dispatcher |
 | **`simply_ip_sync`** | `127.0.0.1:3003` | `10.123.250.13` / `fd10:1993:1000:1199::2:fa13` | `10.124.250.13` / `fd10:1993:1000:1199::1:fa13` | `3003` | External threat feed aggregator & Vault syncer (optional) |
 | **`simply_ip_exporter`** | `127.0.0.1:3002` | `10.123.250.14` / `fd10:1993:1000:1199::2:fa14` | `— (isolate-only)` | `3002` | Raw IP/CIDR banlist & whitelist feed exporter (`/feed/v1/<token>/list.txt`, optional) |
@@ -231,6 +236,7 @@ ansible-playbook playbooks/05_vault_integration.yml
 | `exporter_endpoint_name` | `"Firewall Banlist"` | Name of the auto-created banlist `simply_ip_exporter` endpoint. |
 | `exporter_endpoint_groups` | `"{{ vault_group_name }}..."` | Vault groups exported to `firewall.get.list` (`Main_Ban` + `external_banlist,vpn` when sync enabled). |
 | `exporter_whitelist_endpoint_name` | `"Firewall Whitelist"` | Name of the auto-created whitelist `simply_ip_exporter` endpoint (`vault_whitelist_group_name`). |
+| `exporter_whitelist_ttl_seconds` | `15` | Short cache TTL (seconds) for the whitelist exporter feed so revoked entries drop rapidly. |
 | `hook_executor_allow_ext_network` | `false` | Attach `simply_hook_executor` to `ext` (`false` leaves `ext:` commented out in `docker-compose.yml`). |
 | `vault_allow_ext_network` | `false` | Attach `simply_ip_vault` to `ext` (`false` leaves `ext:` commented out; required `true` for external peering or AbuseIPDB). |
 | `white_list_allow_ext_network` | `false` | Attach `simply_white_list` to `ext` (`false` leaves `ext:` commented out; host proxy still reaches `127.0.0.1:3005`). |
@@ -280,4 +286,8 @@ ipset list bad_ip6 | head -n 10
 
 # Test Hook Executor SSH connectivity from container to host
 docker exec -it simply_hook_executor ssh -i /config/id_ed25519 -p 22 hookexecutor@10.123.0.1 "whoami"
+
+# Emergency host whitelist revocation (cuts kernel ipset + active sockets/conntrack, then syncs Vault DELETE + optional ban)
+/etc/firewall/firewall.revoke.whitelist 203.0.113.20 "Emergency_Revoke" all
+/etc/firewall/firewall.revoke.whitelist 203.0.113.20 "Compromised_Guest" all --ban
 ```

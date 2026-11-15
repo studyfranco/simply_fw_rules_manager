@@ -1,0 +1,134 @@
+#!/bin/bash
+# ==============================================================================
+# Managed by Ansible: Emergency Whitelist Revocation CLI
+# Permissions: 0700 root:root
+# Usage: firewall.revoke.whitelist <target_ip_or_cidr> [cause] [ipset_base|all] [--ban]
+# 1. Cuts kernel ipset access + kills active sockets/conntrack flows immediately.
+# 2. Removes the entry from simply_ip_vault (and optionally bans it on --ban).
+# ==============================================================================
+
+FW_DIR="${FW_DIR:-{{ firewall_dir }}}"
+source "${FW_DIR}/firewall.settings"
+source "${FW_DIR}/firewall.tools"
+
+TARGET=""
+CAUSE="Manual_Revoke"
+TARGET_SET="all"
+MODE="del"
+POS_IDX=0
+
+for arg in "$@"; do
+    case "${arg}" in
+        --ban)
+            MODE="ban"
+            ;;
+        -h|--help)
+            echo "Usage: $0 <target_ip_or_cidr> [cause] [ipset_base|all] [--ban]"
+            exit 0
+            ;;
+        *)
+            case "${POS_IDX}" in
+                0) TARGET="${arg}" ;;
+                1) CAUSE="${arg}" ;;
+                2) TARGET_SET="${arg}" ;;
+                *)
+                    echo "Unexpected argument '${arg}'" >&2
+                    exit 1
+                    ;;
+            esac
+            POS_IDX=$((POS_IDX + 1))
+            ;;
+    esac
+done
+
+if [ -z "${TARGET}" ]; then
+    echo "Usage: $0 <target_ip_or_cidr> [cause] [ipset_base|all] [--ban]" >&2
+    exit 1
+fi
+
+TARGET_CLEAN="${TARGET%/32}"
+TARGET_CLEAN="${TARGET_CLEAN%/128}"
+if ! is_ipv4 "${TARGET}" && ! is_ipv4_net "${TARGET}" && ! is_ipv6 "${TARGET}" && ! is_ipv6_net "${TARGET}"; then
+    echo "Invalid IP or CIDR '${TARGET}'" >&2
+    exit 1
+fi
+
+ALLOW_SCRIPT="${FW_DIR}/firewall.launch.allow.ip"
+if [ ! -x "${ALLOW_SCRIPT}" ]; then
+    echo "Missing executable whitelist runner: ${ALLOW_SCRIPT}" >&2
+    exit 1
+fi
+
+if [ "${MODE}" = "ban" ]; then
+    if ip addr show 2>/dev/null | grep -wq "${TARGET_CLEAN%/*}"; then
+        echo "Refusing to ban local host address '${TARGET_CLEAN}'" >&2
+        exit 1
+    fi
+    for _aut in "${IPAutor[@]:-}"; do
+        if [ -n "${_aut}" ] && [ "${_aut}" = "${TARGET_CLEAN}" ]; then
+            echo "Refusing to ban static IPAutor address '${TARGET_CLEAN}'" >&2
+            exit 1
+        fi
+    done
+fi
+
+"${ALLOW_SCRIPT}" "${TARGET}" "${MODE}" "${CAUSE}" "${TARGET_SET}"
+ALLOW_RC=$?
+if [ "${ALLOW_RC}" -ne 0 ]; then
+    echo "Kernel whitelist revocation failed (rc=${ALLOW_RC}) for ${TARGET}" >&2
+    exit "${ALLOW_RC}"
+fi
+echo "Kernel whitelist access terminated (${MODE}, set=${TARGET_SET}) for ${TARGET}."
+
+{% if vault_mode == 'local' %}
+_VAULT_IP="$(get_container_ipv4_on_network "simply_ip_vault" "{{ docker_net_isolate_name }}")"
+[ -z "$_VAULT_IP" ] && _VAULT_IP="$(get_container_ipv4_on_network "simply_ip_vault" "{{ docker_net_ext_name }}")"
+if [ -n "$_VAULT_IP" ]; then
+    URL_API="http://${_VAULT_IP}:3000"
+else
+{% if docker_pin_container_ips | default(true) | bool %}
+    URL_API="http://{{ docker_container_ips.simply_ip_vault.isolate_ipv4 }}:3000"
+{% else %}
+    URL_API="{{ effective_vault_host_url | default('http://127.0.0.1:3000') }}"
+{% endif %}
+fi
+{% else %}
+URL_API="{{ effective_vault_host_url | default(remote_vault_url) }}"
+{% endif %}
+USER_KEY="{{ effective_vault_api_key | default('') }}"
+SECRET="{{ effective_vault_signing_secret | default('') }}"
+WL_GROUP_NAME="{{ vault_whitelist_group_name | default('Main_Whitelist') }}"
+BAN_GROUP_NAME="{{ vault_group_name | default('Main_Ban') }}"
+VAULT_DELETE_HARD="{{ (white_list_vault_delete_hard | default(false) | bool) | ternary('true', 'false') }}"
+
+if [ -z "${USER_KEY}" ] || [ -z "${SECRET}" ]; then
+    echo "Note: simply_ip_vault credentials are not configured in {{ firewall_dir }}/firewall.revoke.whitelist; kernel cutoff complete, Vault sync skipped." >&2
+    exit 0
+fi
+
+JQ_BIN="${JQ:-$(command -v jq 2>/dev/null || echo /usr/bin/jq)}"
+DEL_PAYLOAD=$("${JQ_BIN}" -nc \
+    --arg target "${TARGET}" \
+    --arg grp "${WL_GROUP_NAME}" \
+    --argjson hard "${VAULT_DELETE_HARD}" \
+    '{target_address: $target, group_name: $grp, hard: $hard}')
+
+if ! vault_signed_call "${URL_API}" "${USER_KEY}" "${SECRET}" DELETE "/api/ips" "${DEL_PAYLOAD}" 10 3 1 >/dev/null; then
+    echo "WARNING: Kernel access was cut, but Vault whitelist DELETE failed for ${TARGET}. Check Vault so periodic sync does not re-allow it." >&2
+    exit 1
+fi
+
+if [ "${MODE}" = "ban" ]; then
+    BAN_PAYLOAD=$("${JQ_BIN}" -nc \
+        --arg target "${TARGET_CLEAN}" \
+        --arg grp "${BAN_GROUP_NAME}" \
+        --arg cause "${CAUSE}" \
+        '{target_address: $target, group_name: $grp, cause: $cause}')
+    if ! vault_signed_call "${URL_API}" "${USER_KEY}" "${SECRET}" POST "/api/ban" "${BAN_PAYLOAD}" 10 5 0 >/dev/null; then
+        echo "WARNING: Kernel access cut and Vault whitelist deleted, but Vault POST /api/ban failed for ${TARGET_CLEAN}." >&2
+        exit 1
+    fi
+fi
+
+echo "Vault whitelist revocation (${MODE}) synchronized for ${TARGET}."
+exit 0

@@ -8,6 +8,7 @@ IPS=/sbin/ipset
 ROUTE=/sbin/route
 SED=/bin/sed
 DUMPCO=/bin/ss
+CONNTRACK=$(command -v conntrack 2>/dev/null || echo /usr/sbin/conntrack)
 DOCKER=/bin/docker
 IFCONFIG=/usr/sbin/ifconfig
 JQ=/usr/bin/jq
@@ -267,20 +268,129 @@ is_ipv6()
 	fi
 }
 
+## @fn _ss_filter_addr
+## @usage _ss_filter_addr "<family:inet|inet6>" "<ip_or_cidr>"
+## @desc Formate une adresse pour les filtres ss (les IPv6 sans / doivent être entre crochets).
+_ss_filter_addr()
+{
+	local family="$1"
+	local addr="$2"
+	if [ "${family}" = "inet6" ] && [[ "${addr}" != */* ]] && [[ "${addr}" != \[* ]]; then
+		printf '[%s]' "${addr}"
+	else
+		printf '%s' "${addr}"
+	fi
+}
+
+## @fn kill_active_connections
+## @usage kill_active_connections "<family:inet|inet6>" "<ip_or_cidr>"
+## @desc Coupe immédiatement les sockets locales (ss -K) et les flux NAT/FORWARD (conntrack -D).
+kill_active_connections()
+{
+	local family="$1"
+	local raw_target="$2"
+	local clean_target="${raw_target}"
+	local ss_family="-4"
+	local ss_addr
+
+	if [ "${family}" = "inet6" ]; then
+		ss_family="-6"
+		clean_target="${raw_target%/128}"
+	else
+		clean_target="${raw_target%/32}"
+	fi
+	ss_addr=$(_ss_filter_addr "${family}" "${clean_target}")
+
+	$DUMPCO "${ss_family}" -n -K src "${ss_addr}" > /dev/null 2>&1 &
+	$DUMPCO "${ss_family}" -n -K dst "${ss_addr}" > /dev/null 2>&1 &
+
+	if [ -x "${CONNTRACK}" ]; then
+		if [ "${family}" = "inet6" ]; then
+			"${CONNTRACK}" -D -f ipv6 -s "${clean_target}" > /dev/null 2>&1 &
+			"${CONNTRACK}" -D -f ipv6 -d "${clean_target}" > /dev/null 2>&1 &
+		else
+			"${CONNTRACK}" -D -s "${clean_target}" > /dev/null 2>&1 &
+			"${CONNTRACK}" -D -d "${clean_target}" > /dev/null 2>&1 &
+		fi
+	fi
+	return 0
+}
+
+## @fn vault_signed_call
+## @usage vault_signed_call "<base_url>" "<api_key>" "<secret>" "<method>" "<path>" ["<body>"] ["<max_time>"] ["<retries>"] ["<allow_404:0|1>"]
+## @desc Exécute un appel HTTP signé HMAC CANONICAL_V1 vers simply_ip_vault.
+vault_signed_call()
+{
+	local base_url="$1"
+	local api_key="$2"
+	local secret="$3"
+	local method="$4"
+	local path="$5"
+	local body="${6:-}"
+	local max_time="${7:-10}"
+	local retries="${8:-3}"
+	local allow_404="${9:-0}"
+	local ts sig resp_raw rc http_code resp_body
+
+	ts=$(date -u +%s)
+	# CANONICAL_V1: sauts de ligne réels entre les 4 champs, aucun à la fin.
+	sig=$(printf '%s\n%s\n%s\n%s' "${method}" "${path%%\?*}" "${ts}" "${body}" \
+		| openssl dgst -sha256 -hmac "${secret}" | sed 's/^.*= //')
+	resp_raw=$(curl --retry "${retries}" --retry-delay 1 --retry-connrefused --max-time "${max_time}" \
+		-sS -w $'\n%{http_code}' -X "${method}" \
+		-H "X-API-Key: ${api_key}" \
+		-H "X-Timestamp: ${ts}" \
+		-H "X-Signature-256: sha256=${sig}" \
+		${body:+-H "Content-Type: application/json" -d "${body}"} \
+		"${base_url}${path}")
+	rc=$?
+	if [ "${rc}" -ne 0 ]; then
+		return "${rc}"
+	fi
+
+	http_code="${resp_raw##*$'\n'}"
+	resp_body="${resp_raw%$'\n'*}"
+	if [ "${http_code}" = "${resp_raw}" ]; then
+		resp_body=""
+	fi
+
+	case "${http_code}" in
+		2[0-9][0-9])
+			[ -n "${resp_body}" ] && printf '%s\n' "${resp_body}"
+			return 0
+			;;
+		404)
+			if [ "${allow_404}" = "1" ]; then
+				[ -n "${resp_body}" ] && printf '%s\n' "${resp_body}"
+				return 0
+			fi
+			;;
+	esac
+
+	echo "Vault API error (${method} ${path}): HTTP ${http_code}${resp_body:+ - ${resp_body}}" >&2
+	return 1
+}
+
 ## @fn close_traffic_list
 ## @usage close_traffic_list "<args_src>" "<args_dst>" "${ips[@]}"
-## @desc Ferme les connexions actives via ss (-k) pour une liste d'adresses IP.
+## @desc Ferme les connexions actives via ss (-K) pour une liste d'adresses IP.
 close_traffic_list()
 {
 	declare -a pids=()
-	local args_src=$1 # -k src
+	local args_src="${1//-k/-K}"
 	shift
-	local args_dst=$1 # -6 -k dst
+	local args_dst="${1//-k/-K}"
 	shift
 	local listIPs=("$@")
+	local ss_ip
 	for IP in "${listIPs[@]}"; do
-		$DUMPCO $args_src $IP > /dev/null 2>&1 & pids+=($!)
-		$DUMPCO $args_dst $IP > /dev/null 2>&1 & pids+=($!)
+		if [[ "${IP}" == *:* ]] && [[ "${IP}" != */* ]] && [[ "${IP}" != \[* ]]; then
+			ss_ip="[${IP}]"
+		else
+			ss_ip="${IP}"
+		fi
+		$DUMPCO $args_src "${ss_ip}" > /dev/null 2>&1 & pids+=($!)
+		$DUMPCO $args_dst "${ss_ip}" > /dev/null 2>&1 & pids+=($!)
 	done
 	wait "${pids[@]}"
 	return 0

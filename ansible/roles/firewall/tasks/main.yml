@@ -85,6 +85,14 @@
     group: root
     mode: "0700"
 
+- name: Deploy firewall.revoke.whitelist emergency revocation CLI
+  ansible.builtin.template:
+    src: firewall.revoke.whitelist.j2
+    dest: "{{ firewall_dir }}/firewall.revoke.whitelist"
+    owner: root
+    group: root
+    mode: "0700"
+
 - name: Deploy firewall.clean.block.ip cleanup script
   ansible.builtin.template:
     src: firewall.clean.block.ip.j2
