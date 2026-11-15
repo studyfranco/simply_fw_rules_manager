@@ -20,6 +20,7 @@
     - { path: "{{ compose_dir }}/config_simply_ip_vault", owner: "1124", group: "1124", mode: "0700" }
     - { path: "{{ compose_dir }}/config_simply_ip_sync", owner: "1126", group: "1126", mode: "0700" }
     - { path: "{{ compose_dir }}/config_simply_ip_exporter", owner: "1125", group: "1125", mode: "0700" }
+    - { path: "{{ compose_dir }}/config_simply_white_list", owner: "1129", group: "1129", mode: "0700" }
     - { path: "{{ compose_dir }}/postgres_data", owner: "70", group: "70", mode: "0700" }
 
 - name: Ensure persistent postgres_password when database_type is postgres_container and none was provided
@@ -74,6 +75,7 @@
     - { name: sync_encryption_key, owner: "1126", group: "1126" }
     - { name: vault_encryption_key, owner: "1124", group: "1124" }
     - { name: exporter_encryption_key, owner: "1125", group: "1125" }
+    - { name: whitelist_encryption_key, owner: "1129", group: "1129" }
     - { name: hook_executor_signing_secret, owner: "1128", group: "1128" }
     - { name: hook_executor_api_key, owner: "1128", group: "1128" }
     - { name: vault_api_key, owner: "1125", group: "1125" }
@@ -92,10 +94,24 @@
     - { name: sync_encryption_key, owner: "1126", group: "1126" }
     - { name: vault_encryption_key, owner: "1124", group: "1124" }
     - { name: exporter_encryption_key, owner: "1125", group: "1125" }
+    - { name: whitelist_encryption_key, owner: "1129", group: "1129" }
     - { name: hook_executor_signing_secret, owner: "1128", group: "1128" }
     - { name: hook_executor_api_key, owner: "1128", group: "1128" }
     - { name: vault_api_key, owner: "1125", group: "1125" }
     - { name: vault_signing_secret, owner: "1125", group: "1125" }
+
+- name: Ensure placeholder Vault credential files exist for simply_white_list (populated later by vault_integration)
+  ansible.builtin.file:
+    path: "{{ firewall_secrets_dir }}/{{ item }}.txt"
+    state: touch
+    owner: "1129"
+    group: "1129"
+    mode: "0600"
+    modification_time: preserve
+    access_time: preserve
+  loop:
+    - whitelist_vault_api_key
+    - whitelist_vault_signing_secret
 
 - name: Ensure editable firewall files exist with proper container ownership
   ansible.builtin.file:
@@ -191,7 +207,11 @@
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
-      for net in "{{ docker_net_ext_name }}" "{{ docker_net_isolate_name }}"; do
+      NETS_TO_CHECK=("{{ docker_net_isolate_name }}")
+      {% if (deploy_simply_ip_sync | default(false) | bool) or (hook_executor_allow_ext_network | default(false) | bool) or (vault_allow_ext_network | default(false) | bool) or ((deploy_simply_white_list | default(false) | bool) and (white_list_allow_ext_network | default(false) | bool)) %}
+      NETS_TO_CHECK+=("{{ docker_net_ext_name }}")
+      {% endif %}
+      for net in "${NETS_TO_CHECK[@]}"; do
         if ! docker network inspect "$net" | jq -e '.[0].IPAM.Config[]? | select(.Subnet | contains(":"))' >/dev/null 2>&1; then
           echo "Existing Docker network '$net' has no IPv6 subnet in IPAM; recreate it with --ipv6 or set docker_pin_container_ipv6=false." >&2
           exit 1
@@ -241,6 +261,7 @@
               simply_ip_vault|simply_hook_executor|simply_fw_rules_manager) echo 3000 ;;
               simply_ip_exporter) echo 3002 ;;
               simply_ip_sync) echo 3003 ;;
+              simply_white_list) echo 3004 ;;
               *) echo "" ;;
             esac
           }
@@ -252,7 +273,7 @@
             pending=0
             for svc in $SERVICES; do
               logs_clean=$(docker logs "$svc" 2>&1 | sed -E 's/\x1b\[[0-9;]*m//g' || true)
-              if printf '%s\n' "$logs_clean" | grep -q "Signing secret"; then
+              if printf '%s\n' "$logs_clean" | grep -qi "Signing secret"; then
                 continue
               fi
               cport=$(container_port_for "$svc")
@@ -283,13 +304,13 @@
           touch "${OUTPUT_FILE}"
           chmod 0600 "${OUTPUT_FILE}"
 
-          for svc in simply_fw_rules_manager simply_hook_executor simply_ip_vault simply_ip_sync simply_ip_exporter; do
+          for svc in simply_fw_rules_manager simply_hook_executor simply_ip_vault simply_ip_sync simply_ip_exporter simply_white_list; do
             if docker compose -f {{ compose_dir }}/docker-compose.yml ps --services | grep -q "^${svc}$"; then
               echo "=== [${svc}] ===" >> "${OUTPUT_FILE}"
               (docker logs "${svc}" 2>&1 || true) \
                 | sed -E 's/\x1b\[[0-9;]*m//g' \
-                | grep -E "║[[:space:]]*(X-API-Key|Signing secret)" \
-                | sed -E 's/^.*║[[:space:]]*//; s/[[:space:]]*║.*$//' >> "${OUTPUT_FILE}" || true
+                | grep -iE "(║[[:space:]]*)?(X-API-Key|Signing secret)" \
+                | sed -E 's/^.*║[[:space:]]*//; s/^[[:space:]]+//; s/[[:space:]]*║.*$//; s/^[Ss]igning [Ss]ecret[[:space:]]*:/Signing secret :/' >> "${OUTPUT_FILE}" || true
               echo "" >> "${OUTPUT_FILE}"
             fi
           done
@@ -341,6 +362,50 @@
     - name: Start or update Simply Firewall container stack
       ansible.builtin.command:
         cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --remove-orphans
+
+    - name: Extract Master API credentials for any newly added simply_* service missing from master_key
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          OUTPUT_FILE="{{ firewall_dir }}/master_key"
+          COMPOSE="{{ compose_dir }}/docker-compose.yml"
+          SERVICES=$(docker compose -f "$COMPOSE" ps --services | grep -E '^simply_' || true)
+          MISSING=""
+          for svc in $SERVICES; do
+            if ! awk -v s="=== [${svc}] ===" '$0 == s {f=1; next} /^=== \[/ {f=0} f && /X-API-Key/ {ok=1} END {exit !ok}' "$OUTPUT_FILE"; then
+              MISSING="$MISSING $svc"
+            fi
+          done
+          if [ -z "${MISSING// /}" ]; then
+            exit 0
+          fi
+          for attempt in $(seq 1 20); do
+            pending=0
+            for svc in $MISSING; do
+              logs_clean=$(docker logs "$svc" 2>&1 | sed -E 's/\x1b\[[0-9;]*m//g' || true)
+              if ! printf '%s\n' "$logs_clean" | grep -qi "Signing secret"; then
+                pending=1
+                break
+              fi
+            done
+            [ "$pending" -eq 0 ] && break
+            sleep 2
+          done
+          for svc in $MISSING; do
+            logs_clean=$(docker logs "$svc" 2>&1 | sed -E 's/\x1b\[[0-9;]*m//g' || true)
+            if printf '%s\n' "$logs_clean" | grep -qi "Signing secret"; then
+              echo "=== [${svc}] ===" >> "${OUTPUT_FILE}"
+              printf '%s\n' "$logs_clean" \
+                | grep -iE "(║[[:space:]]*)?(X-API-Key|Signing secret)" \
+                | sed -E 's/^.*║[[:space:]]*//; s/^[[:space:]]+//; s/[[:space:]]*║.*$//; s/^[Ss]igning [Ss]ecret[[:space:]]*:/Signing secret :/' >> "${OUTPUT_FILE}" || true
+              echo "" >> "${OUTPUT_FILE}"
+            fi
+          done
+      args:
+        executable: /bin/bash
+      register: master_key_append_res
+      changed_when: false
+      no_log: true
 
     - name: Reload active firewall rules to bind localDockerTCP and container policies after stack update
       ansible.builtin.shell:

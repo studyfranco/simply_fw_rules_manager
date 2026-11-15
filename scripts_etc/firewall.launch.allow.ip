@@ -1,0 +1,125 @@
+#!/bin/bash
+# ==============================================================================
+# Immediate IP/CIDR Whitelist Action (Add / Remove)
+# Usage: firewall.launch.allow.ip <target_ip_or_cidr> [add|del] [cause] [ipset_base]
+# ==============================================================================
+
+FW_DIR="${FW_DIR:-/etc/firewall}"
+source "${FW_DIR}/firewall.settings"
+source "${FW_DIR}/firewall.tools"
+
+TARGET="$1"
+ACTION="${2:-add}"
+CAUSE="${3:-Manual_Whitelist}"
+TARGET_SET="${4:-${FIREWALL_WHITELIST_IPSET:-special_guest}}"
+
+if [ -z "${TARGET}" ]; then
+	echo "Usage: $0 <target_ip_or_cidr> [add|del] [cause] [ipset_base]" >&2
+	exit 1
+fi
+
+if [ "${ACTION}" != "add" ] && [ "${ACTION}" != "del" ]; then
+	echo "Invalid action '${ACTION}': expected 'add' or 'del'" >&2
+	exit 1
+fi
+
+if ! [[ "${TARGET_SET}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+	echo "Invalid target ipset name '${TARGET_SET}'" >&2
+	exit 1
+fi
+
+is_local_or_static_aut() {
+	local addr="$1"
+	local base_addr="${addr%/*}"
+	if ip addr show | grep -wq "${base_addr}"; then
+		return 0
+	fi
+	local aut_ip
+	for aut_ip in "${IPAutor[@]}"; do
+		if [ "${aut_ip}" = "${addr}" ] || [ "${aut_ip}" = "${base_addr}" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+remove_exact_line() {
+	local file="$1"
+	local needle="$2"
+	[ -f "${file}" ] || return 0
+	local tmp_file
+	tmp_file=$(mktemp "${file}.XXXXXX") || return 1
+	awk -v target="${needle}" '$0 != target' "${file}" > "${tmp_file}" && mv "${tmp_file}" "${file}"
+}
+
+FAMILY=""
+SET_NAME=""
+ALLOW_FILE="${FW_DIR}/firewall.allow.${TARGET_SET}.ip"
+FEED_ALLOW_FILE="${FW_DIR}/to_allow.${TARGET_SET}.ipv4"
+
+if is_ipv4 "${TARGET}" || is_ipv4_net "${TARGET}"; then
+	FAMILY="inet"
+	SET_NAME="${TARGET_SET}"
+elif is_ipv6 "${TARGET}" || is_ipv6_net "${TARGET}"; then
+	FAMILY="inet6"
+	SET_NAME="${TARGET_SET}6"
+	ALLOW_FILE="${FW_DIR}/firewall.allow.${TARGET_SET}.ip6"
+	FEED_ALLOW_FILE="${FW_DIR}/to_allow.${TARGET_SET}.ipv6"
+else
+	echo "Unsupported IP/CIDR target '${TARGET}'" >&2
+	exit 1
+fi
+
+GOOD_BASE="${IPSLISTGOODIP:-good_ip}"
+if [ "${TARGET_SET}" = "${GOOD_BASE}" ]; then
+	if [ "${FAMILY}" = "inet" ]; then
+		FEED_ALLOW_FILE="${FW_DIR}/to_allow.ipv4"
+	else
+		FEED_ALLOW_FILE="${FW_DIR}/to_allow.ipv6"
+	fi
+fi
+
+if [ "${ACTION}" = "add" ]; then
+	if [ "${FAMILY}" = "inet" ]; then
+		$IPS create "${SET_NAME}" hash:net maxelem 999999999 2>/dev/null
+	else
+		$IPS create "${SET_NAME}" hash:net maxelem 999999999 family inet6 2>/dev/null
+	fi
+	$IPS add "${SET_NAME}" "${TARGET}" -exist 2>/dev/null || true
+
+	touch "${ALLOW_FILE}" && chmod 0600 "${ALLOW_FILE}" 2>/dev/null
+	grep -qxF "${TARGET}" "${ALLOW_FILE}" 2>/dev/null || echo "${TARGET}" >> "${ALLOW_FILE}"
+
+	# Only lift prior bans when explicitly promoting an IP into the full good_ip admin set.
+	if [ "${TARGET_SET}" = "${GOOD_BASE}" ]; then
+		if [ "${FAMILY}" = "inet" ]; then
+			$IPS del "${IPSLISTBADIP}" "${TARGET}" 2>/dev/null &
+			is_ipv4 "${TARGET}" && $ROUTE -n del "${TARGET}" reject 2>/dev/null &
+		else
+			$IPS del "${IPSLISTBADIP}6" "${TARGET}" 2>/dev/null &
+			is_ipv6 "${TARGET}" && $ROUTE -6 -n del "${TARGET}" reject 2>/dev/null &
+		fi
+		if command -v fail2ban-client >/dev/null 2>&1; then
+			/usr/bin/fail2ban-client set sshd unbanip "${TARGET%/*}" 2>/dev/null &
+			/usr/bin/fail2ban-client set recidive unbanip "${TARGET%/*}" 2>/dev/null &
+		fi
+	fi
+else
+	if [ "${TARGET_SET}" = "${GOOD_BASE}" ] && is_local_or_static_aut "${TARGET}"; then
+		echo "Refusing to remove local or IPAutor address '${TARGET}' from ${GOOD_BASE}" >&2
+		exit 0
+	fi
+	$IPS del "${SET_NAME}" "${TARGET}" 2>/dev/null || true
+	remove_exact_line "${ALLOW_FILE}" "${TARGET}"
+	remove_exact_line "${FEED_ALLOW_FILE}" "${TARGET}"
+	if [ "${TARGET_SET}" = "${GOOD_BASE}" ]; then
+		if [ "${FAMILY}" = "inet" ]; then
+			remove_exact_line "${FW_DIR}/firewall.allow.ip" "${TARGET}"
+		else
+			remove_exact_line "${FW_DIR}/firewall.allow.ip6" "${TARGET}"
+		fi
+	fi
+fi
+
+wait
+exit 0

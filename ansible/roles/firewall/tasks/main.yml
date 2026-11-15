@@ -77,6 +77,14 @@
     group: root
     mode: "0700"
 
+- name: Deploy firewall.launch.allow.ip fast whitelist runner
+  ansible.builtin.template:
+    src: firewall.launch.allow.ip.j2
+    dest: "{{ firewall_dir }}/firewall.launch.allow.ip"
+    owner: root
+    group: root
+    mode: "0700"
+
 - name: Deploy firewall.clean.block.ip cleanup script
   ansible.builtin.template:
     src: firewall.clean.block.ip.j2
@@ -85,7 +93,7 @@
     group: root
     mode: "0700"
 
-- name: Ensure blocklist record files exist with restricted permissions
+- name: Ensure blocklist and whitelist record files exist with restricted permissions
   ansible.builtin.file:
     path: "{{ item }}"
     state: touch
@@ -97,6 +105,8 @@
   loop:
     - "{{ firewall_dir }}/firewall.block.ip"
     - "{{ firewall_dir }}/firewall.block.ip6"
+    - "{{ firewall_dir }}/firewall.allow.{{ firewall_whitelist_ipset_name | default('special_guest') }}.ip"
+    - "{{ firewall_dir }}/firewall.allow.{{ firewall_whitelist_ipset_name | default('special_guest') }}.ip6"
 
 - name: Deploy systemd service units
   ansible.builtin.template:

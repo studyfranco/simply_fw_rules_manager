@@ -46,6 +46,31 @@
       default: "no"
       private: false
 
+    - name: input_deploy_white_list
+      prompt: "Deploy simply_white_list invitation whitelist service? (yes/no) [press Enter for 'no']"
+      default: "no"
+      private: false
+
+    - name: input_configure_vault_whitelist
+      prompt: "Configure Vault whitelist group + hook_executor/get.list integration? (yes/no/auto) [press Enter for 'auto' = yes if simply_white_list enabled]"
+      default: "auto"
+      private: false
+
+    - name: input_firewall_whitelist_ipset_name
+      prompt: "Target firewall ipset for whitelist hook ('special_guest' = country-open access via firewall.rules.special, 'good_ip' = full admin bypass, or custom set) [press Enter for 'special_guest']"
+      default: "special_guest"
+      private: false
+
+    - name: input_vault_allow_ext_network
+      prompt: "Attach simply_ip_vault to 'ext' Docker network (needed only for external webhooks like AbuseIPDB or remote access)? (yes/no) [press Enter for 'no']"
+      default: "no"
+      private: false
+
+    - name: input_hook_executor_allow_ext_network
+      prompt: "Attach simply_hook_executor to 'ext' Docker network? (yes/no) [press Enter for 'no']"
+      default: "no"
+      private: false
+
     - name: input_ssh_access_mode
       prompt: "SSH firewall access mode ('whitelist_only', 'country_restricted', 'worldwide') [press Enter for 'whitelist_only']"
       default: "whitelist_only"
@@ -82,6 +107,10 @@
         vault_normalize_ipv6_to_48: "{{ (input_vault_normalize_ipv6_to_48 | bool) if (input_vault_normalize_ipv6_to_48 != 'yes') else (vault_normalize_ipv6_to_48 | default(true) | bool) }}"
         deploy_simply_ip_sync: "{{ (input_deploy_sync | bool) if (input_deploy_sync != 'no') else (deploy_simply_ip_sync | default(false) | bool) }}"
         deploy_simply_ip_exporter: "{{ (input_deploy_exporter | bool) if (input_deploy_exporter != 'no') else (deploy_simply_ip_exporter | default(false) | bool) }}"
+        deploy_simply_white_list: "{{ (input_deploy_white_list | bool) if (input_deploy_white_list != 'no') else (deploy_simply_white_list | default(false) | bool) }}"
+        vault_allow_ext_network: "{{ (input_vault_allow_ext_network | bool) if (input_vault_allow_ext_network != 'no') else (vault_allow_ext_network | default(false) | bool) }}"
+        hook_executor_allow_ext_network: "{{ (input_hook_executor_allow_ext_network | bool) if (input_hook_executor_allow_ext_network != 'no') else (hook_executor_allow_ext_network | default(false) | bool) }}"
+        firewall_whitelist_ipset_name: "{{ input_firewall_whitelist_ipset_name if (input_firewall_whitelist_ipset_name != 'special_guest') else (firewall_whitelist_ipset_name | default('special_guest')) }}"
         ssh_access_mode: "{{ input_ssh_access_mode if (input_ssh_access_mode != 'whitelist_only') else (ssh_access_mode | default('whitelist_only')) }}"
         country_open_port_default: "{{ input_country_open_port if (input_country_open_port != 'FR') else (country_open_port_default | default('FR')) }}"
         abuseipdb_api_key: "{{ abuseipdb_api_key if (abuseipdb_api_key is defined and abuseipdb_api_key | length > 0) else input_abuseipdb_api_key }}"
@@ -92,8 +121,18 @@
             else (input_operator_whitelist_ips.split(',') | map('trim') | reject('eq', '') | list if input_operator_whitelist_ips | length > 0 else [])
           }}
 
-    - name: Compute early effective Vault URLs for container and host roles
+    - name: Compute derived whitelist orchestration and early effective Vault URLs
       ansible.builtin.set_fact:
+        configure_vault_whitelist: >-
+          {{
+            (input_configure_vault_whitelist | bool)
+            if ((input_configure_vault_whitelist | lower) in ['yes', 'no', 'true', 'false'])
+            else (
+              (configure_vault_whitelist | bool)
+              if (configure_vault_whitelist is defined and (configure_vault_whitelist | string | lower) in ['true', 'false', 'yes', 'no'])
+              else (deploy_simply_white_list | bool)
+            )
+          }}
         effective_vault_container_url: "{{ 'http://simply_ip_vault:3000' if (vault_mode == 'local') else remote_vault_url }}"
         effective_vault_host_url: "{{ 'http://127.0.0.1:3000' if (vault_mode == 'local') else remote_vault_url }}"
         effective_vault_url: "{{ 'http://simply_ip_vault:3000' if (vault_mode == 'local') else remote_vault_url }}"

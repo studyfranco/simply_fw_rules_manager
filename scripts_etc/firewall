@@ -52,8 +52,8 @@ set_rules()
 		$IPT -t raw -A $CHAINICMPTRAFIC -p icmp -m u32 ! --u32 "4&0x3FFF=0" -j DROP && \
 		$IPT -t raw -A $CHAINICMPTRAFIC -p icmp -m length --length 1492:65535 -j DROP &
 
-	$IPS create $IPSLISTGOODIP hash:ip maxelem 999999999 2> /dev/null &
-	$IPS create ${IPSLISTGOODIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null &
+	$IPS create $IPSLISTGOODIP hash:net maxelem 999999999 2> /dev/null &
+	$IPS create ${IPSLISTGOODIP}6 hash:net maxelem 999999999 family inet6 2> /dev/null &
 	$IPS create ${IPSLISTBADIP} hash:net maxelem 999999999 2> /dev/null &
 	$IPS create ${IPSLISTBADIP}6 hash:net maxelem 999999999 family inet6 2> /dev/null &
 	$IPS create ${IPSLOCALS} hash:net maxelem 999999999 2> /dev/null &

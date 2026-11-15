@@ -76,8 +76,6 @@ docker_container_ips:
   simply_fw_rules_manager:
     isolate_ipv4: "10.123.250.10"
     isolate_ipv6: "fd10:1993:1000:1199::2:fa10"
-    ext_ipv4: "10.124.250.10"
-    ext_ipv6: "fd10:1993:1000:1199::1:fa10"
   simply_hook_executor:
     isolate_ipv4: "10.123.250.11"
     isolate_ipv6: "fd10:1993:1000:1199::2:fa11"
@@ -96,8 +94,6 @@ docker_container_ips:
   simply_ip_exporter:
     isolate_ipv4: "10.123.250.14"
     isolate_ipv6: "fd10:1993:1000:1199::2:fa14"
-    ext_ipv4: "10.124.250.14"
-    ext_ipv6: "fd10:1993:1000:1199::1:fa14"
   socket_proxy:
     isolate_ipv4: "10.123.250.15"
     isolate_ipv6: "fd10:1993:1000:1199::2:fa15"
@@ -107,6 +103,11 @@ docker_container_ips:
   fail2ban:
     isolate_ipv4: "10.123.250.17"
     isolate_ipv6: "fd10:1993:1000:1199::2:fa17"
+  simply_white_list:
+    isolate_ipv4: "10.123.250.18"
+    isolate_ipv6: "fd10:1993:1000:1199::2:fa18"
+    ext_ipv4: "10.124.250.18"
+    ext_ipv6: "fd10:1993:1000:1199::1:fa18"
 
 # Firewall Directory & System Locations
 firewall_dir: "/etc/firewall"
@@ -122,6 +123,7 @@ user_hook_executor: "1127:1127"
 user_ip_vault: "1124:1124"
 user_ip_sync: "1126:1126"
 user_ip_exporter: "1125:1125"
+user_white_list: "1129:1129"
 
 # SSH Exposure & Initial Bootstrap Firewall Policy
 # Options for ssh_access_mode: "whitelist_only" | "country_restricted" | "worldwide"
@@ -158,8 +160,31 @@ remote_vault_signing_secret: ""
 # Optional Ecosystem Components
 deploy_simply_ip_sync: false
 deploy_simply_ip_exporter: false
+deploy_simply_white_list: false
 
-# simply_ip_exporter Default Endpoint (when deploy_simply_ip_exporter is true)
+# Whitelist Vault & Firewall Orchestration
+# Empty string / "auto" defaults to true whenever deploy_simply_white_list is true.
+configure_vault_whitelist: ""
+vault_whitelist_group_name: "Main_Whitelist"
+# Target ipset for live whitelist hooks and exporter pulls ("special_guest" for country-open access via firewall.rules.special, "good_ip" for full admin bypass, or custom set)
+firewall_whitelist_ipset_name: "special_guest"
+vault_whitelist_webhook_url: ""
+
+# simply_white_list Runtime Policy (used when deploy_simply_white_list is true)
+white_list_vault_delete_hard: false
+white_list_default_link_ttl_hours: 24
+white_list_max_link_ttl_hours: 72
+white_list_default_link_max_uses: 1
+white_list_max_link_max_uses: 1
+white_list_default_duration_days: 1
+white_list_max_duration_days: 0
+white_list_cleanup_hour: 5
+white_list_cleanup_minute: 0
+white_list_trusted_proxies: ""
+white_list_ipv4_probe_url: ""
+white_list_ipv6_probe_url: ""
+
+# simply_ip_exporter Default Endpoints (when deploy_simply_ip_exporter is true)
 exporter_endpoint_name: "Firewall Banlist"
 exporter_endpoint_groups: "{{ vault_group_name ~ (',external_banlist,vpn' if (deploy_simply_ip_sync | default(false) | bool) else '') }}"
 exporter_endpoint_ttl_seconds: 300
@@ -167,16 +192,23 @@ exporter_endpoint_max_age_seconds: 0
 exporter_filter_rfc1918: true
 exporter_filter_bogons: true
 exporter_filter_loopback: true
+exporter_whitelist_endpoint_name: "Firewall Whitelist"
+exporter_whitelist_filter_rfc1918: false
+exporter_whitelist_filter_bogons: true
+exporter_whitelist_filter_loopback: true
+exporter_whitelist_feed_path: ""
 
 # simply_hook_executor Orchestration Names & Standalone Fallbacks
 hook_ssh_credential_name: "local-host-hookexecutor"
 hook_ssh_target_name: "local-host"
 hook_name_report: "firewall-report"
 hook_name_block: "firewall-block-ip"
+hook_name_allow: "firewall-allow-ip"
 hook_name_reload: "firewall-reload"
 hook_name_update_containers: "docker-update-containers"
 hook_id_report: ""
 hook_id_block: ""
+hook_id_allow: ""
 hook_id_reload: ""
 hook_id_update_containers: ""
 hook_executor_api_key: ""
@@ -266,8 +298,10 @@ sync_default_destination_groups:
         source_url: "https://raw.githubusercontent.com/NazgulCoder/IPLists/refs/heads/main/output/vpn-ipv6.txt"
         parser_type: "REGEX_LINE"
 
-# Hook Executor Network Exposure
+# Optional 'ext' Network Exposure (simply_fw_rules_manager & simply_ip_exporter stay strictly isolate-only)
 hook_executor_allow_ext_network: false
+vault_allow_ext_network: false
+white_list_allow_ext_network: false
 
 # Container Images
 image_fw_rules_manager: "ghcr.io/studyfranco/simply_fw_rules_manager:master"
@@ -277,6 +311,7 @@ image_fail2ban: "lscr.io/linuxserver/fail2ban:latest"
 image_ip_vault: "ghcr.io/studyfranco/simply_ip_vault:master"
 image_ip_sync: "ghcr.io/studyfranco/simply_ip_sync:master"
 image_ip_exporter: "ghcr.io/studyfranco/simply_ip_exporter:master"
+image_white_list: "ghcr.io/studyfranco/simply_white_list:master"
 
 # Systemd Timers & Scheduled Automation
 enable_blocklist_update_timer: true

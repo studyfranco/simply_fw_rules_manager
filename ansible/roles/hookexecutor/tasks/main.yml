@@ -103,6 +103,7 @@
       Defaults:{{ hookexecutor_user }} !requiretty
       {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall.report
       {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall.launch.block.ip
+      {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall.launch.allow.ip
       {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall reload
       {{ hookexecutor_user }} ALL=(root) NOPASSWD: {{ firewall_dir }}/firewall reload-rules
       {{ hookexecutor_user }} ALL=(root) NOPASSWD: /etc/init.d/firewall reload

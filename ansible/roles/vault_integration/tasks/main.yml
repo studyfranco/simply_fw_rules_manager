@@ -35,15 +35,17 @@
       }
       jq -nc \
         --arg fw_key "$(extract_key simply_fw_rules_manager 'X-API-Key')" \
-        --arg fw_sec "$(extract_key simply_fw_rules_manager 'Signing secret')" \
+        --arg fw_sec "$(extract_key simply_fw_rules_manager 'Signing [Ss]ecret')" \
         --arg hook_key "$(extract_key simply_hook_executor 'X-API-Key')" \
-        --arg hook_sec "$(extract_key simply_hook_executor 'Signing secret')" \
+        --arg hook_sec "$(extract_key simply_hook_executor 'Signing [Ss]ecret')" \
         --arg vault_key "$(extract_key simply_ip_vault 'X-API-Key')" \
-        --arg vault_sec "$(extract_key simply_ip_vault 'Signing secret')" \
+        --arg vault_sec "$(extract_key simply_ip_vault 'Signing [Ss]ecret')" \
         --arg sync_key "$(extract_key simply_ip_sync 'X-API-Key')" \
-        --arg sync_sec "$(extract_key simply_ip_sync 'Signing secret')" \
+        --arg sync_sec "$(extract_key simply_ip_sync 'Signing [Ss]ecret')" \
         --arg exp_key "$(extract_key simply_ip_exporter 'X-API-Key')" \
-        --arg exp_sec "$(extract_key simply_ip_exporter 'Signing secret')" \
+        --arg exp_sec "$(extract_key simply_ip_exporter 'Signing [Ss]ecret')" \
+        --arg wl_key "$(extract_key simply_white_list 'X-API-Key')" \
+        --arg wl_sec "$(extract_key simply_white_list 'Signing [Ss]ecret')" \
         '{
           fw_key: $fw_key,
           fw_sec: $fw_sec,
@@ -54,7 +56,9 @@
           sync_key: $sync_key,
           sync_sec: $sync_sec,
           exp_key: $exp_key,
-          exp_sec: $exp_sec
+          exp_sec: $exp_sec,
+          wl_key: $wl_key,
+          wl_sec: $wl_sec
         }'
   args:
     executable: /bin/bash
@@ -80,12 +84,13 @@
         printf '%s' "$ip"
       }
       jq -nc \
-        --arg v "$(ip_for simply_ip_vault {{ docker_net_ext_name }})" \
+        --arg v "$(ip_for simply_ip_vault {{ docker_net_isolate_name }})" \
         --arg h "$(ip_for simply_hook_executor {{ docker_net_isolate_name }})" \
-        --arg e "$(ip_for simply_ip_exporter {{ docker_net_ext_name }})" \
-        --arg s "$(ip_for simply_ip_sync {{ docker_net_ext_name }})" \
+        --arg e "$(ip_for simply_ip_exporter {{ docker_net_isolate_name }})" \
+        --arg s "$(ip_for simply_ip_sync {{ docker_net_isolate_name }})" \
         --arg f "$(ip_for simply_fw_rules_manager {{ docker_net_isolate_name }})" \
-        '{vault_ip: $v, hook_ip: $h, exporter_ip: $e, sync_ip: $s, fw_ip: $f}'
+        --arg w "$(ip_for simply_white_list {{ docker_net_isolate_name }})" \
+        '{vault_ip: $v, hook_ip: $h, exporter_ip: $e, sync_ip: $s, fw_ip: $f, wl_ip: $w}'
   args:
     executable: /bin/bash
   register: live_container_ips_raw
@@ -100,7 +105,7 @@
         ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).vault_ip) ~ ':3000')
         if (vault_mode == 'local' and ((live_container_ips_raw.stdout | default('{}') | from_json).vault_ip | default('') | length > 0))
         else (
-          ('http://' ~ docker_container_ips.simply_ip_vault.ext_ipv4 ~ ':3000')
+          ('http://' ~ docker_container_ips.simply_ip_vault.isolate_ipv4 ~ ':3000')
           if (vault_mode == 'local' and (docker_pin_container_ips | default(true) | bool))
           else ('http://127.0.0.1:3000' if (vault_mode == 'local') else remote_vault_url)
         )
@@ -139,7 +144,7 @@
       {{
         ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).exporter_ip) ~ ':3002')
         if ((live_container_ips_raw.stdout | default('{}') | from_json).exporter_ip | default('') | length > 0)
-        else (('http://' ~ docker_container_ips.simply_ip_exporter.ext_ipv4 ~ ':3002') if (docker_pin_container_ips | default(true) | bool) else 'http://127.0.0.1:3002')
+        else (('http://' ~ docker_container_ips.simply_ip_exporter.isolate_ipv4 ~ ':3002') if (docker_pin_container_ips | default(true) | bool) else 'http://127.0.0.1:3002')
       }}
     effective_exporter_api_key: "{{ hostvars[inventory_hostname].local_exporter_api_key | default(extracted_master_creds.exp_key, true) | default('', true) }}"
     effective_exporter_signing_secret: "{{ hostvars[inventory_hostname].local_exporter_signing_secret | default(extracted_master_creds.exp_sec, true) | default('', true) }}"
@@ -147,10 +152,24 @@
       {{
         ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).sync_ip) ~ ':3003')
         if ((live_container_ips_raw.stdout | default('{}') | from_json).sync_ip | default('') | length > 0)
-        else (('http://' ~ docker_container_ips.simply_ip_sync.ext_ipv4 ~ ':3003') if (docker_pin_container_ips | default(true) | bool) else 'http://127.0.0.1:3003')
+        else (('http://' ~ docker_container_ips.simply_ip_sync.isolate_ipv4 ~ ':3003') if (docker_pin_container_ips | default(true) | bool) else 'http://127.0.0.1:3003')
       }}
     effective_sync_api_key: "{{ hostvars[inventory_hostname].local_sync_api_key | default(extracted_master_creds.sync_key, true) | default('', true) }}"
     effective_sync_signing_secret: "{{ hostvars[inventory_hostname].local_sync_signing_secret | default(extracted_master_creds.sync_sec, true) | default('', true) }}"
+    effective_wl_host_url: >-
+      {{
+        ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).wl_ip) ~ ':3004')
+        if ((live_container_ips_raw.stdout | default('{}') | from_json).wl_ip | default('') | length > 0)
+        else (('http://' ~ docker_container_ips.simply_white_list.isolate_ipv4 ~ ':3004') if (docker_pin_container_ips | default(true) | bool) else 'http://127.0.0.1:3005')
+      }}
+    effective_wl_api_key: "{{ hostvars[inventory_hostname].local_wl_api_key | default(extracted_master_creds.wl_key, true) | default('', true) }}"
+    effective_wl_signing_secret: "{{ hostvars[inventory_hostname].local_wl_signing_secret | default(extracted_master_creds.wl_sec, true) | default('', true) }}"
+    effective_configure_vault_whitelist: >-
+      {{
+        (configure_vault_whitelist | bool)
+        if (configure_vault_whitelist is defined and (configure_vault_whitelist | string | lower) in ['true', 'false', 'yes', 'no'])
+        else (deploy_simply_white_list | default(false) | bool)
+      }}
   no_log: true
 
 - name: Wait for local simply_hook_executor readiness endpoint
@@ -208,6 +227,17 @@
   delay: 2
   when: deploy_simply_ip_exporter | bool
 
+- name: Wait for local simply_white_list readiness endpoint
+  ansible.builtin.uri:
+    url: "{{ effective_wl_host_url }}/ready"
+    status_code: [200]
+    timeout: 5
+  register: wl_ready
+  until: wl_ready.status is defined and wl_ready.status == 200
+  retries: 20
+  delay: 2
+  when: deploy_simply_white_list | bool
+
 # ==============================================================================
 # 1. simply_hook_executor: SSH Credential, SSH Target, 4 Hooks, and API Keys
 # ==============================================================================
@@ -225,7 +255,10 @@
       TARGET_PORT="{{ effective_sshd_port | int }}"
       TARGET_USER="{{ hookexecutor_user }}"
       SECRETS_DIR="{{ firewall_secrets_dir }}"
-      PROVISION_VAULT_KEY="{{ 'true' if (vault_enable_ban_webhook | bool and (vault_mode == 'local' or (vault_ban_webhook_url | default('') | length > 0))) else 'false' }}"
+      ENABLE_BAN_WH="{{ 'true' if (vault_enable_ban_webhook | bool and (vault_mode == 'local' or (vault_ban_webhook_url | default('') | length > 0))) else 'false' }}"
+      CONFIGURE_WL="{{ 'true' if (effective_configure_vault_whitelist | bool and (vault_mode == 'local' or (vault_whitelist_webhook_url | default('') | length > 0))) else 'false' }}"
+      WL_IPSET="{{ firewall_whitelist_ipset_name | default('special_guest') }}"
+      PROVISION_VAULT_KEY="{{ 'true' if ((vault_enable_ban_webhook | bool and (vault_mode == 'local' or (vault_ban_webhook_url | default('') | length > 0))) or (effective_configure_vault_whitelist | bool and (vault_mode == 'local' or (vault_whitelist_webhook_url | default('') | length > 0)))) else 'false' }}"
 
       if [ ! -s "$SSH_KEY_FILE" ]; then
         echo "Missing hookexecutor SSH private key: $SSH_KEY_FILE" >&2
@@ -427,6 +460,25 @@
         '{"target_ip":"2001:db8:abcd::/48","cause":"portsentry"}' \
         "$PARAMS_BLOCK_CAUSE")
 
+      H_ID_ALLOW=""
+      if [ "$CONFIGURE_WL" = "true" ]; then
+        PARAMS_ALLOW=$(jq -nc --arg wlset "$WL_IPSET" '[
+          {"param_key":"target_ip","description":"IPv4/IPv6 address or CIDR to whitelist or revoke","is_required":true},
+          {"param_key":"action","description":"Operation: add or del","default_value":"add","is_required":false},
+          {"param_key":"cause","description":"Whitelist grant note or reason","default_value":"whitelist","is_required":false},
+          {"param_key":"ipset","description":"Target host ipset base name (e.g. special_guest or good_ip)","default_value":$wlset,"is_required":false}
+        ]')
+        SAMPLE_ALLOW=$(jq -nc --arg wlset "$WL_IPSET" '{"target_ip":"203.0.113.20","action":"add","cause":"guest-invite","ipset":$wlset}')
+        H_ID_ALLOW=$(ensure_ssh_hook \
+          "{{ hook_name_allow }}" \
+          "Immediately allow or revoke IP/CIDR in scoped firewall ipset" \
+          "{{ firewall_dir }}/firewall.launch.allow.ip" \
+          30 \
+          '${target_ip} ${action} ${cause} ${ipset}' \
+          "$SAMPLE_ALLOW" \
+          "$PARAMS_ALLOW")
+      fi
+
       H_ID_RELOAD=$(ensure_ssh_hook \
         "{{ hook_name_reload }}" \
         "Reload host firewall rules via SSH" \
@@ -522,12 +574,17 @@
       fi
 
       if [ "$PROVISION_VAULT_KEY" = "true" ]; then
+        VAULT_HOOKS_CSV=""
+        [ "$ENABLE_BAN_WH" = "true" ] && VAULT_HOOKS_CSV="{{ hook_name_block }}"
+        if [ "$CONFIGURE_WL" = "true" ]; then
+          VAULT_HOOKS_CSV="${VAULT_HOOKS_CSV:+${VAULT_HOOKS_CSV},}{{ hook_name_allow }}"
+        fi
         if [ "$(ensure_key_with_grants \
           "vault-ban-webhook" "true" \
           "${SECRETS_DIR}/vault_ban_hook_api_key.txt" \
           "${SECRETS_DIR}/vault_ban_hook_signing_secret.txt" \
           "root:root" \
-          "{{ hook_name_block }}")" = "true" ]; then
+          "$VAULT_HOOKS_CSV")" = "true" ]; then
           VAULT_BAN_KEY_CHANGED=true
         fi
       fi
@@ -535,6 +592,7 @@
       jq -nc \
         --arg r "$H_ID_REPORT" \
         --arg b "$H_ID_BLOCK" \
+        --arg a "$H_ID_ALLOW" \
         --arg l "$H_ID_RELOAD" \
         --arg u "$H_ID_UPDATE" \
         --argjson fwc "$FW_SECRETS_CHANGED" \
@@ -543,6 +601,7 @@
         '{
           hook_id_report: $r,
           hook_id_block: $b,
+          hook_id_allow: $a,
           hook_id_reload: $l,
           hook_id_update_containers: $u,
           fw_secrets_changed: $fwc,
@@ -563,6 +622,7 @@
     _hook_prov: "{{ hook_provision_raw.stdout | default('{}', true) | from_json }}"
     hook_id_report: "{{ (hook_provision_raw.stdout | default('{}', true) | from_json).hook_id_report | default(hook_name_report, true) }}"
     hook_id_block: "{{ (hook_provision_raw.stdout | default('{}', true) | from_json).hook_id_block | default(hook_name_block, true) }}"
+    hook_id_allow: "{{ (hook_provision_raw.stdout | default('{}', true) | from_json).hook_id_allow | default(hook_name_allow, true) }}"
     hook_id_reload: "{{ (hook_provision_raw.stdout | default('{}', true) | from_json).hook_id_reload | default(hook_name_reload, true) }}"
     hook_id_update_containers: "{{ (hook_provision_raw.stdout | default('{}', true) | from_json).hook_id_update_containers | default(hook_name_update_containers, true) }}"
   when:
@@ -691,9 +751,9 @@
   when: simply_hook_conf_res is changed
 
 # ==============================================================================
-# 4. simply_ip_vault: IPv6 /48 Normalization Setting, Groups & Webhooks
+# 4. simply_ip_vault: IPv6 /48 Normalization Setting, Groups, Webhooks & Whitelist Key
 # ==============================================================================
-- name: Configure simply_ip_vault settings, groups, AbuseIPDB and Firewall Block webhooks
+- name: Configure simply_ip_vault settings, groups, webhooks and simply_white_list Daughter key
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
@@ -704,12 +764,24 @@
       DESIRED_NORM="{{ vault_normalize_ipv6_to_48 | bool | ternary('true', 'false') }}"
       GROUP_NAME="{{ vault_group_name }}"
       DEPLOY_SYNC="{{ deploy_simply_ip_sync | bool | ternary('true', 'false') }}"
+      DEPLOY_WL="{{ deploy_simply_white_list | bool | ternary('true', 'false') }}"
+      CONFIGURE_WL="{{ 'true' if (effective_configure_vault_whitelist | bool) else 'false' }}"
+      WL_GROUP_NAME="{{ vault_whitelist_group_name }}"
+      WL_IPSET="{{ firewall_whitelist_ipset_name | default('special_guest') }}"
       ENABLE_BAN_WH="{{ 'true' if (vault_enable_ban_webhook | bool and (vault_mode == 'local' or (vault_ban_webhook_url | default('') | length > 0))) else 'false' }}"
       BAN_WH_URL="{{ vault_ban_webhook_url | default('http://simply_hook_executor:3000/webhook/' ~ hook_name_block, true) }}"
+      ENABLE_WL_WH="{{ 'true' if (effective_configure_vault_whitelist | bool and (vault_mode == 'local' or (vault_whitelist_webhook_url | default('') | length > 0))) else 'false' }}"
+      WL_WH_URL="{{ vault_whitelist_webhook_url | default('http://simply_hook_executor:3000/webhook/' ~ hook_name_allow, true) }}"
       FORCE_BAN_WH="{{ 'true' if ((_hook_prov.vault_ban_key_changed | default(false)) | bool) else 'false' }}"
-      BAN_AK_FILE="{{ firewall_secrets_dir }}/vault_ban_hook_api_key.txt"
-      BAN_SEC_FILE="{{ firewall_secrets_dir }}/vault_ban_hook_signing_secret.txt"
+      SECRETS_DIR="{{ firewall_secrets_dir }}"
+      BAN_AK_FILE="${SECRETS_DIR}/vault_ban_hook_api_key.txt"
+      BAN_SEC_FILE="${SECRETS_DIR}/vault_ban_hook_signing_secret.txt"
+      WL_AK_FILE="${SECRETS_DIR}/whitelist_vault_api_key.txt"
+      WL_SEC_FILE="${SECRETS_DIR}/whitelist_vault_signing_secret.txt"
+      WL_OWNER="{{ user_white_list | default('1129:1129') }}"
+      WL_BOUND_IPS="{% if vault_mode == 'local' %}{% if docker_pin_container_ips | default(true) | bool %}{{ docker_container_ips.simply_white_list.isolate_ipv4 }}{% if docker_pin_container_ipv6 | default(true) | bool %},{{ docker_container_ips.simply_white_list.isolate_ipv6 }}{% endif %}{% if (white_list_allow_ext_network | default(false) | bool) and (vault_allow_ext_network | default(false) | bool) %},{{ docker_container_ips.simply_white_list.ext_ipv4 }}{% if docker_pin_container_ipv6 | default(true) | bool %},{{ docker_container_ips.simply_white_list.ext_ipv6 }}{% endif %}{% endif %}{% else %}{{ docker_net_isolate_ipv4_subnet }}{% if docker_enable_ipv6 | default(true) | bool %},{{ docker_net_isolate_ipv6_subnet }}{% endif %}{% endif %}{% endif %}"
       CHANGED=false
+      WL_SECRETS_CHANGED=false
 
       vault_call() {
         local method="$1" path="$2" body="${3:-}"
@@ -735,93 +807,112 @@
         fi
       fi
 
-      # B. Ensure required banlist groups exist (StrictJson denies unknown fields)
+      # B. Ensure required groups exist (StrictJson denies unknown fields)
       ensure_group() {
-        local gname="$1"
+        local gname="$1" gtype="${2:-banlist}"
         local groups_json gid cbody
         groups_json=$(vault_call GET "/api/groups")
         gid=$(printf '%s' "$groups_json" | jq -r --arg n "$gname" '.[] | select(.name == $n) | .id' | head -n1)
         if [ -z "$gid" ] || [ "$gid" = "null" ]; then
-          cbody=$(jq -nc --arg name "$gname" '{name: $name, group_type: "banlist"}')
+          cbody=$(jq -nc --arg name "$gname" --arg gt "$gtype" '{name: $name, group_type: $gt}')
           gid=$(vault_call POST "/api/groups" "$cbody" | jq -r '.id')
           CHANGED=true
         fi
         printf '%s' "$gid"
       }
 
-      GROUP_ID=$(ensure_group "$GROUP_NAME")
+      GROUP_ID=$(ensure_group "$GROUP_NAME" "banlist")
       if [ "$DEPLOY_SYNC" = "true" ]; then
-        ensure_group "external_banlist" >/dev/null
-        ensure_group "vpn" >/dev/null
+        ensure_group "external_banlist" "banlist" >/dev/null
+        ensure_group "vpn" "banlist" >/dev/null
+      fi
+      WL_GROUP_ID=""
+      if [ "$CONFIGURE_WL" = "true" ] || [ "$DEPLOY_WL" = "true" ]; then
+        WL_GROUP_ID=$(ensure_group "$WL_GROUP_NAME" "whitelist")
       fi
 
       WEBHOOKS_JSON=$(vault_call GET "/api/webhooks")
+
+      upsert_webhook() {
+        local name="$1" url="$2" gid="$3" events="$4" auth_mode="$5"
+        local headers="$6" ak="$7" sec="$8" tpl="$9" norm_v6="${10}" force="${11:-false}"
+        local existing wh_id diff body
+
+        existing=$(printf '%s' "$WEBHOOKS_JSON" | jq -c --arg n "$name" '.[] | select(.name == $n)' | head -n1)
+        build_wh_body() {
+          local include_name="$1"
+          jq -nc \
+            --arg name "$name" \
+            --arg url "$url" \
+            --arg gid "$gid" \
+            --arg events "$events" \
+            --arg auth_mode "$auth_mode" \
+            --arg headers "$headers" \
+            --arg ak "$ak" \
+            --arg sec "$sec" \
+            --arg tpl "$tpl" \
+            --argjson norm "$norm_v6" \
+            --argjson inc_name "$include_name" \
+            '(
+              (if $inc_name then {name: $name} else {} end) +
+              {
+                target_url: $url,
+                group_id: $gid,
+                events: $events,
+                auth_mode: $auth_mode,
+                payload_template: $tpl,
+                send_normalized_ipv6: $norm,
+                is_active: true
+              } +
+              (if $auth_mode == "NONE" and ($headers | length > 0) then {headers_json: $headers} else {} end) +
+              (if $auth_mode == "CANONICAL_V1" then {api_key: $ak, secret_token: $sec} else {} end)
+            )'
+        }
+
+        if [ -z "$existing" ]; then
+          body=$(build_wh_body true)
+          vault_call POST "/api/webhooks" "$body" >/dev/null
+          CHANGED=true
+        else
+          wh_id=$(printf '%s' "$existing" | jq -r '.id')
+          diff=$(printf '%s' "$existing" | jq -r \
+            --arg url "$url" --arg gid "$gid" --arg ev "$events" --arg am "$auth_mode" \
+            --arg hdr "$headers" --arg tpl "$tpl" --argjson norm "$norm_v6" \
+            '(
+              .target_url != $url or
+              .group_id != $gid or
+              (.events // "") != $ev or
+              .auth_mode != $am or
+              .payload_template != $tpl or
+              .send_normalized_ipv6 != $norm or
+              .is_active != true or
+              (if $am == "NONE" then ((.headers_json // "") != $hdr) else (.has_api_key != true) end)
+            )')
+          if [ "$force" = "true" ] || [ "$diff" = "true" ]; then
+            body=$(build_wh_body false)
+            vault_call PUT "/api/webhooks/${wh_id}" "$body" >/dev/null
+            CHANGED=true
+          fi
+        fi
+      }
 
       # C. Ensure AbuseIPDB Report webhook (send_normalized_ipv6=false => exact attacker IPv6)
       if [ -n "${ABUSEIPDB_KEY:-}" ]; then
         HEADERS_STR=$(jq -nc --arg k "$ABUSEIPDB_KEY" '{Key: $k, Accept: "application/json"}')
         ABUSE_TPL=$(jq -nc --arg cats "{{ abuseipdb_report_categories | default('14,18') }}" \
           '{ip: "$target_address", categories: $cats, comment: "$cause"}')
-        EXISTING_ABUSE=$(printf '%s' "$WEBHOOKS_JSON" | jq -c '.[] | select(.name == "AbuseIPDB Report")' | head -n1)
-
-        if [ -z "$EXISTING_ABUSE" ]; then
-          WH_BODY=$(jq -nc \
-            --arg name "AbuseIPDB Report" \
-            --arg url "https://api.abuseipdb.com/api/v2/report" \
-            --arg gid "$GROUP_ID" \
-            --arg events "IP_ADD,IP_UPDATE" \
-            --arg auth_mode "NONE" \
-            --arg headers "$HEADERS_STR" \
-            --arg tpl "$ABUSE_TPL" \
-            '{
-              name: $name,
-              target_url: $url,
-              group_id: $gid,
-              events: $events,
-              auth_mode: $auth_mode,
-              headers_json: $headers,
-              payload_template: $tpl,
-              send_normalized_ipv6: false,
-              is_active: true
-            }')
-          vault_call POST "/api/webhooks" "$WH_BODY" >/dev/null
-          CHANGED=true
-        else
-          ABUSE_ID=$(printf '%s' "$EXISTING_ABUSE" | jq -r '.id')
-          ABUSE_DIFF=$(printf '%s' "$EXISTING_ABUSE" | jq -r \
-            --arg gid "$GROUP_ID" --arg hdr "$HEADERS_STR" --arg tpl "$ABUSE_TPL" \
-            '(
-              .target_url != "https://api.abuseipdb.com/api/v2/report" or
-              .group_id != $gid or
-              (.events // "") != "IP_ADD,IP_UPDATE" or
-              .auth_mode != "NONE" or
-              (.headers_json // "") != $hdr or
-              .payload_template != $tpl or
-              .send_normalized_ipv6 != false or
-              .is_active != true
-            )')
-          if [ "$ABUSE_DIFF" = "true" ]; then
-            UPD_BODY=$(jq -nc \
-              --arg url "https://api.abuseipdb.com/api/v2/report" \
-              --arg gid "$GROUP_ID" \
-              --arg events "IP_ADD,IP_UPDATE" \
-              --arg auth_mode "NONE" \
-              --arg headers "$HEADERS_STR" \
-              --arg tpl "$ABUSE_TPL" \
-              '{
-                target_url: $url,
-                group_id: $gid,
-                events: $events,
-                auth_mode: $auth_mode,
-                headers_json: $headers,
-                payload_template: $tpl,
-                send_normalized_ipv6: false,
-                is_active: true
-              }')
-            vault_call PUT "/api/webhooks/${ABUSE_ID}" "$UPD_BODY" >/dev/null
-            CHANGED=true
-          fi
-        fi
+        upsert_webhook \
+          "AbuseIPDB Report" \
+          "https://api.abuseipdb.com/api/v2/report" \
+          "$GROUP_ID" \
+          "IP_ADD,IP_UPDATE" \
+          "NONE" \
+          "$HEADERS_STR" \
+          "" \
+          "" \
+          "$ABUSE_TPL" \
+          "false" \
+          "false"
       fi
 
       # D. Ensure Firewall Block webhook (send_normalized_ipv6=true => /48 blocking on host)
@@ -829,73 +920,148 @@
         BAN_AK=$(tr -d '\r\n' < "$BAN_AK_FILE")
         BAN_SEC=$(tr -d '\r\n' < "$BAN_SEC_FILE")
         BAN_TPL='{"target_ip":"$target_address","cause":"$cause"}'
-        EXISTING_BAN=$(printf '%s' "$WEBHOOKS_JSON" | jq -c '.[] | select(.name == "Firewall Block")' | head -n1)
+        upsert_webhook \
+          "Firewall Block" \
+          "$BAN_WH_URL" \
+          "$GROUP_ID" \
+          "IP_ADD,IP_UPDATE" \
+          "CANONICAL_V1" \
+          "" \
+          "$BAN_AK" \
+          "$BAN_SEC" \
+          "$BAN_TPL" \
+          "true" \
+          "$FORCE_BAN_WH"
+      fi
 
-        if [ -z "$EXISTING_BAN" ]; then
-          FB_BODY=$(jq -nc \
-            --arg name "Firewall Block" \
-            --arg url "$BAN_WH_URL" \
-            --arg gid "$GROUP_ID" \
-            --arg events "IP_ADD,IP_UPDATE" \
-            --arg auth_mode "CANONICAL_V1" \
-            --arg ak "$BAN_AK" \
-            --arg sec "$BAN_SEC" \
-            --arg tpl "$BAN_TPL" \
-            '{
-              name: $name,
-              target_url: $url,
-              group_id: $gid,
-              events: $events,
-              auth_mode: $auth_mode,
-              api_key: $ak,
-              secret_token: $sec,
-              payload_template: $tpl,
-              send_normalized_ipv6: true,
-              is_active: true
-            }')
-          vault_call POST "/api/webhooks" "$FB_BODY" >/dev/null
+      # E. Ensure Whitelist Allow & Revoke webhooks (send_normalized_ipv6=false => exact client IP/CIDR into WL_IPSET)
+      if [ "$ENABLE_WL_WH" = "true" ] && [ -n "$WL_GROUP_ID" ] && [ -s "$BAN_AK_FILE" ] && [ -s "$BAN_SEC_FILE" ]; then
+        BAN_AK=$(tr -d '\r\n' < "$BAN_AK_FILE")
+        BAN_SEC=$(tr -d '\r\n' < "$BAN_SEC_FILE")
+        WL_ALLOW_TPL=$(jq -nc --arg ipset "$WL_IPSET" \
+          '{target_ip: "$target_address", action: "add", cause: "$cause", ipset: $ipset}')
+        WL_REVOKE_TPL=$(jq -nc --arg ipset "$WL_IPSET" \
+          '{target_ip: "$target_address", action: "del", cause: "$cause", ipset: $ipset}')
+
+        upsert_webhook \
+          "Whitelist Allow" \
+          "$WL_WH_URL" \
+          "$WL_GROUP_ID" \
+          "IP_ADD,IP_UPDATE" \
+          "CANONICAL_V1" \
+          "" \
+          "$BAN_AK" \
+          "$BAN_SEC" \
+          "$WL_ALLOW_TPL" \
+          "false" \
+          "$FORCE_BAN_WH"
+
+        upsert_webhook \
+          "Whitelist Revoke" \
+          "$WL_WH_URL" \
+          "$WL_GROUP_ID" \
+          "IP_DELETE" \
+          "CANONICAL_V1" \
+          "" \
+          "$BAN_AK" \
+          "$BAN_SEC" \
+          "$WL_REVOKE_TPL" \
+          "false" \
+          "$FORCE_BAN_WH"
+      fi
+
+      # F. Provision scoped Vault Daughter API Key for simply_white_list
+      #    Verified via Master GET /api/keys (.prefix check) so bound_ips never blocks host Ansible!
+      if [ "$DEPLOY_WL" = "true" ] && [ -n "$WL_GROUP_ID" ]; then
+        write_secret_file() {
+          local dest="$1" val="$2"
+          local tmp="${dest}.tmp.$$"
+          printf '%s' "$val" > "$tmp"
+          chmod 0600 "$tmp"
+          chown "$WL_OWNER" "$tmp"
+          mv -f "$tmp" "$dest"
+        }
+
+        KEYS_JSON=$(vault_call GET "/api/keys")
+        EXISTING_WL_KEY=$(printf '%s' "$KEYS_JSON" | jq -c '.[] | select(.name == "simply_white_list")' | head -n1)
+        LOCAL_PREFIX=""
+        if [ -s "$WL_AK_FILE" ]; then
+          LOCAL_PREFIX=$(tr -d '\r\n' < "$WL_AK_FILE" | cut -c1-8)
+        fi
+
+        if [ -z "$EXISTING_WL_KEY" ]; then
+          CREATE_BODY=$(jq -nc \
+            --arg name "simply_white_list" \
+            --arg bips "$WL_BOUND_IPS" \
+            '(
+              {
+                name: $name,
+                can_manage_keys: false,
+                can_manage_webhooks: false,
+                can_create_groups: false
+              } + (if ($bips | length > 0) then {bound_ips: $bips} else {} end)
+            )')
+          CREATE_RESP=$(vault_call POST "/api/keys" "$CREATE_BODY")
+          WL_KEY_ID=$(printf '%s' "$CREATE_RESP" | jq -r '.id')
+          write_secret_file "$WL_AK_FILE" "$(printf '%s' "$CREATE_RESP" | jq -r '.plaintext_key')"
+          write_secret_file "$WL_SEC_FILE" "$(printf '%s' "$CREATE_RESP" | jq -r '.signing_secret')"
+          WL_SECRETS_CHANGED=true
           CHANGED=true
         else
-          BAN_ID=$(printf '%s' "$EXISTING_BAN" | jq -r '.id')
-          BAN_DIFF=$(printf '%s' "$EXISTING_BAN" | jq -r \
-            --arg url "$BAN_WH_URL" --arg gid "$GROUP_ID" --arg tpl "$BAN_TPL" \
-            '(
-              .target_url != $url or
-              .group_id != $gid or
-              (.events // "") != "IP_ADD,IP_UPDATE" or
-              .auth_mode != "CANONICAL_V1" or
-              .has_api_key != true or
-              .payload_template != $tpl or
-              .send_normalized_ipv6 != true or
-              .is_active != true
-            )')
-          if [ "$FORCE_BAN_WH" = "true" ] || [ "$BAN_DIFF" = "true" ]; then
-            FB_UPD=$(jq -nc \
-              --arg url "$BAN_WH_URL" \
-              --arg gid "$GROUP_ID" \
-              --arg events "IP_ADD,IP_UPDATE" \
-              --arg auth_mode "CANONICAL_V1" \
-              --arg ak "$BAN_AK" \
-              --arg sec "$BAN_SEC" \
-              --arg tpl "$BAN_TPL" \
-              '{
-                target_url: $url,
-                group_id: $gid,
-                events: $events,
-                auth_mode: $auth_mode,
-                api_key: $ak,
-                secret_token: $sec,
-                payload_template: $tpl,
-                send_normalized_ipv6: true,
-                is_active: true
-              }')
-            vault_call PUT "/api/webhooks/${BAN_ID}" "$FB_UPD" >/dev/null
+          WL_KEY_ID=$(printf '%s' "$EXISTING_WL_KEY" | jq -r '.id')
+          CUR_PREFIX=$(printf '%s' "$EXISTING_WL_KEY" | jq -r '.prefix // ""')
+          CUR_BIPS=$(printf '%s' "$EXISTING_WL_KEY" | jq -r '.bound_ips // ""')
+          CUR_GLOBAL_BAD=$(printf '%s' "$EXISTING_WL_KEY" | jq -r \
+            '(.can_manage_keys == true or .can_manage_webhooks == true or .can_create_groups == true)')
+
+          # Update bound_ips or downgrade global flags if drifted
+          if [ "$CUR_GLOBAL_BAD" = "true" ] || { [ -n "$WL_BOUND_IPS" ] && [ "$CUR_BIPS" != "$WL_BOUND_IPS" ]; }; then
+            UPD_KEY_BODY=$(jq -nc \
+              --arg bips "$WL_BOUND_IPS" \
+              '(
+                {
+                  can_manage_keys: false,
+                  can_manage_webhooks: false,
+                  can_create_groups: false
+                } + (if ($bips | length > 0) then {bound_ips: $bips} else {} end)
+              )')
+            vault_call PUT "/api/keys/${WL_KEY_ID}" "$UPD_KEY_BODY" >/dev/null
             CHANGED=true
           fi
+
+          # Rotate key+secret in place if local files are missing or prefix drifted
+          if [ ! -s "$WL_AK_FILE" ] || [ ! -s "$WL_SEC_FILE" ] || [ "$CUR_PREFIX" != "$LOCAL_PREFIX" ]; then
+            ROT_RESP=$(vault_call POST "/api/keys/${WL_KEY_ID}/rotate" "{}")
+            write_secret_file "$WL_AK_FILE" "$(printf '%s' "$ROT_RESP" | jq -r '.plaintext_key')"
+            write_secret_file "$WL_SEC_FILE" "$(printf '%s' "$ROT_RESP" | jq -r '.signing_secret')"
+            WL_SECRETS_CHANGED=true
+            CHANGED=true
+          fi
+        fi
+
+        # Enforce strict single-group ACL (can_read/write/delete=true, can_manage=false on WL_GROUP_ID only)
+        WL_PERM_MATCH=$(printf '%s' "${EXISTING_WL_KEY:-{}}" | jq -r --arg gid "$WL_GROUP_ID" \
+          '[(.group_permissions // [])[] | select(.group_id == $gid and .can_read == true and .can_write == true and .can_delete == true and .can_manage == false)] | length == 1')
+        if [ -z "$EXISTING_WL_KEY" ] || [ "$WL_PERM_MATCH" != "true" ]; then
+          PERM_BODY=$(jq -nc --arg gid "$WL_GROUP_ID" \
+            '{group_id: $gid, can_read: true, can_write: true, can_delete: true, can_manage: false}')
+          vault_call POST "/api/keys/${WL_KEY_ID}/groups" "$PERM_BODY" >/dev/null
+          CHANGED=true
+        fi
+
+        # Strip any unintended extra group permissions from simply_white_list
+        if [ -n "$EXISTING_WL_KEY" ]; then
+          EXTRA_GIDS=$(printf '%s' "$EXISTING_WL_KEY" | jq -r --arg gid "$WL_GROUP_ID" \
+            '(.group_permissions // [])[] | select(.group_id != $gid) | .group_id')
+          for extra_gid in $EXTRA_GIDS; do
+            vault_call DELETE "/api/keys/${WL_KEY_ID}/permissions/${extra_gid}" >/dev/null
+            CHANGED=true
+          done
         fi
       fi
 
       echo "changed=${CHANGED}"
+      echo "wl_secrets_changed=${WL_SECRETS_CHANGED}"
   args:
     executable: /bin/bash
   environment:
@@ -907,10 +1073,59 @@
     - effective_vault_signing_secret | length > 0
   no_log: true
 
+- name: Recreate simply_white_list if Vault Daughter API credentials changed
+  ansible.builtin.command:
+    cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --force-recreate simply_white_list
+  when:
+    - deploy_simply_white_list | bool
+    - "'wl_secrets_changed=true' in (vault_cfg_res.stdout | default(''))"
+
+- name: Refresh simply_white_list live bridge IP and firewall rules after recreate
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      if systemctl is-active --quiet firewall && [ -x "{{ firewall_dir }}/firewall" ]; then
+        {{ firewall_dir }}/firewall reload-rules
+      fi
+      ip=$(docker inspect -f '{% raw %}{{ with (index .NetworkSettings.Networks "{% endraw %}{{ docker_net_isolate_name }}{% raw %}") }}{{ .IPAddress }}{{ end }}{% endraw %}' simply_white_list 2>/dev/null || true)
+      if [ -z "$ip" ]; then
+        ip=$(docker inspect -f '{% raw %}{{range .NetworkSettings.Networks}}{{if .IPAddress}}{{.IPAddress}} {{end}}{{end}}{% endraw %}' simply_white_list 2>/dev/null | awk '{print $1}' || true)
+      fi
+      printf '%s' "$ip"
+  args:
+    executable: /bin/bash
+  register: wl_new_ip_raw
+  when:
+    - deploy_simply_white_list | bool
+    - "'wl_secrets_changed=true' in (vault_cfg_res.stdout | default(''))"
+  changed_when: false
+
+- name: Update effective_wl_host_url after simply_white_list recreate
+  ansible.builtin.set_fact:
+    effective_wl_host_url: "{{ 'http://' ~ (wl_new_ip_raw.stdout | trim) ~ ':3004' }}"
+  when:
+    - deploy_simply_white_list | bool
+    - "'wl_secrets_changed=true' in (vault_cfg_res.stdout | default(''))"
+    - wl_new_ip_raw.stdout is defined
+    - wl_new_ip_raw.stdout | trim | length > 0
+
+- name: Wait for simply_white_list readiness after credential update
+  ansible.builtin.uri:
+    url: "{{ effective_wl_host_url }}/ready"
+    status_code: [200]
+    timeout: 5
+  register: wl_post_secret_ready
+  until: wl_post_secret_ready.status is defined and wl_post_secret_ready.status == 200
+  retries: 20
+  delay: 2
+  when:
+    - deploy_simply_white_list | bool
+    - "'wl_secrets_changed=true' in (vault_cfg_res.stdout | default(''))"
+
 # ==============================================================================
-# 5. simply_ip_exporter: Real Vault secrets, Endpoint creation, Host blocklist feed
+# 5. simply_ip_exporter: Real Vault secrets, Endpoint creation, Host blocklist & whitelist feeds
 # ==============================================================================
-- name: Configure simply_ip_exporter Vault secrets and feed endpoint
+- name: Configure simply_ip_exporter Vault secrets and feed endpoints
   when:
     - deploy_simply_ip_exporter | bool
     - effective_exporter_api_key | length > 0
@@ -943,7 +1158,7 @@
           if systemctl is-active --quiet firewall && [ -x "{{ firewall_dir }}/firewall" ]; then
             {{ firewall_dir }}/firewall reload-rules
           fi
-          ip=$(docker inspect -f '{% raw %}{{ with (index .NetworkSettings.Networks "{% endraw %}{{ docker_net_ext_name }}{% raw %}") }}{{ .IPAddress }}{{ end }}{% endraw %}' simply_ip_exporter 2>/dev/null || true)
+          ip=$(docker inspect -f '{% raw %}{{ with (index .NetworkSettings.Networks "{% endraw %}{{ docker_net_isolate_name }}{% raw %}") }}{{ .IPAddress }}{{ end }}{% endraw %}' simply_ip_exporter 2>/dev/null || true)
           if [ -z "$ip" ]; then
             ip=$(docker inspect -f '{% raw %}{{range .NetworkSettings.Networks}}{{if .IPAddress}}{{.IPAddress}} {{end}}{{end}}{% endraw %}' simply_ip_exporter 2>/dev/null | awk '{print $1}' || true)
           fi
@@ -973,20 +1188,14 @@
       delay: 2
       when: exporter_secrets_copy is changed
 
-    - name: Ensure simply_ip_exporter public banlist endpoint exists and stays synced
+    - name: Ensure simply_ip_exporter banlist and whitelist endpoints exist and stay synced
       ansible.builtin.shell:
         cmd: |
           set -euo pipefail
           EXP_URL="{{ effective_exporter_host_url }}"
           EXP_KEY="{{ effective_exporter_api_key }}"
           EXP_SEC="{{ effective_exporter_signing_secret }}"
-          EP_NAME="{{ exporter_endpoint_name }}"
-          EP_GROUPS="{{ exporter_endpoint_groups }}"
-          EP_TTL="{{ exporter_endpoint_ttl_seconds | int }}"
-          EP_MAX_AGE="{{ exporter_endpoint_max_age_seconds | int }}"
-          F_RFC1918="{{ exporter_filter_rfc1918 | bool | ternary('true', 'false') }}"
-          F_BOGONS="{{ exporter_filter_bogons | bool | ternary('true', 'false') }}"
-          F_LOOPBACK="{{ exporter_filter_loopback | bool | ternary('true', 'false') }}"
+          CONFIGURE_WL="{{ 'true' if (effective_configure_vault_whitelist | bool or (deploy_simply_white_list | bool)) else 'false' }}"
           CHANGED=false
 
           exp_call() {
@@ -1004,51 +1213,26 @@
           }
 
           EPS=$(exp_call GET "/api/endpoints")
-          EXISTING_EP=$(printf '%s' "$EPS" | jq -c --arg n "$EP_NAME" '.[] | select(.name == $n)' | head -n1)
-          if [ -z "$EXISTING_EP" ]; then
-            BODY=$(jq -nc \
-              --arg name "$EP_NAME" \
-              --arg desc "Managed by Ansible" \
-              --arg vg "$EP_GROUPS" \
-              --argjson ttl "$EP_TTL" \
-              --argjson ma "$EP_MAX_AGE" \
-              --argjson rfc "$F_RFC1918" \
-              --argjson bog "$F_BOGONS" \
-              --argjson lp "$F_LOOPBACK" \
-              '{
-                name: $name,
-                description: $desc,
-                vault_groups: $vg,
-                ttl_seconds: $ttl,
-                max_age_seconds: $ma,
-                filter_rfc1918: $rfc,
-                filter_bogons: $bog,
-                filter_loopback: $lp
-              }')
-            EP_OBJ=$(exp_call POST "/api/endpoints" "$BODY")
-            CHANGED=true
-          else
-            EP_ID=$(printf '%s' "$EXISTING_EP" | jq -r '.id')
-            DIFF=$(printf '%s' "$EXISTING_EP" | jq -r \
-              --arg vg "$EP_GROUPS" --argjson ttl "$EP_TTL" --argjson ma "$EP_MAX_AGE" \
-              --argjson rfc "$F_RFC1918" --argjson bog "$F_BOGONS" --argjson lp "$F_LOOPBACK" \
-              '(
-                .vault_groups != $vg or
-                .ttl_seconds != $ttl or
-                .max_age_seconds != $ma or
-                .filter_rfc1918 != $rfc or
-                .filter_bogons != $bog or
-                .filter_loopback != $lp
-              )')
-            if [ "$DIFF" = "true" ]; then
-              BODY=$(jq -nc \
-                --arg vg "$EP_GROUPS" \
-                --argjson ttl "$EP_TTL" \
-                --argjson ma "$EP_MAX_AGE" \
-                --argjson rfc "$F_RFC1918" \
-                --argjson bog "$F_BOGONS" \
-                --argjson lp "$F_LOOPBACK" \
+
+          ensure_exporter_endpoint() {
+            local ep_name="$1" ep_groups="$2" ep_ttl="$3" ep_max_age="$4"
+            local f_rfc1918="$5" f_bogons="$6" f_loopback="$7"
+            local existing ep_id diff body ep_obj
+
+            existing=$(printf '%s' "$EPS" | jq -c --arg n "$ep_name" '.[] | select(.name == $n)' | head -n1)
+            if [ -z "$existing" ]; then
+              body=$(jq -nc \
+                --arg name "$ep_name" \
+                --arg desc "Managed by Ansible" \
+                --arg vg "$ep_groups" \
+                --argjson ttl "$ep_ttl" \
+                --argjson ma "$ep_max_age" \
+                --argjson rfc "$f_rfc1918" \
+                --argjson bog "$f_bogons" \
+                --argjson lp "$f_loopback" \
                 '{
+                  name: $name,
+                  description: $desc,
                   vault_groups: $vg,
                   ttl_seconds: $ttl,
                   max_age_seconds: $ma,
@@ -1056,30 +1240,95 @@
                   filter_bogons: $bog,
                   filter_loopback: $lp
                 }')
-              EP_OBJ=$(exp_call PUT "/api/endpoints/${EP_ID}" "$BODY")
+              ep_obj=$(exp_call POST "/api/endpoints" "$body")
               CHANGED=true
             else
-              EP_OBJ="$EXISTING_EP"
+              ep_id=$(printf '%s' "$existing" | jq -r '.id')
+              diff=$(printf '%s' "$existing" | jq -r \
+                --arg vg "$ep_groups" --argjson ttl "$ep_ttl" --argjson ma "$ep_max_age" \
+                --argjson rfc "$f_rfc1918" --argjson bog "$f_bogons" --argjson lp "$f_loopback" \
+                '(
+                  .vault_groups != $vg or
+                  .ttl_seconds != $ttl or
+                  .max_age_seconds != $ma or
+                  .filter_rfc1918 != $rfc or
+                  .filter_bogons != $bog or
+                  .filter_loopback != $lp
+                )')
+              if [ "$diff" = "true" ]; then
+                body=$(jq -nc \
+                  --arg vg "$ep_groups" \
+                  --argjson ttl "$ep_ttl" \
+                  --argjson ma "$ep_max_age" \
+                  --argjson rfc "$f_rfc1918" \
+                  --argjson bog "$f_bogons" \
+                  --argjson lp "$f_loopback" \
+                  '{
+                    vault_groups: $vg,
+                    ttl_seconds: $ttl,
+                    max_age_seconds: $ma,
+                    filter_rfc1918: $rfc,
+                    filter_bogons: $bog,
+                    filter_loopback: $lp
+                  }')
+                ep_obj=$(exp_call PUT "/api/endpoints/${ep_id}" "$body")
+                CHANGED=true
+              else
+                ep_obj="$existing"
+              fi
             fi
+
+            printf '%s' "$ep_obj" | jq -r '.feed_path'
+          }
+
+          BAN_FEED_PATH=$(ensure_exporter_endpoint \
+            "{{ exporter_endpoint_name }}" \
+            "{{ exporter_endpoint_groups }}" \
+            "{{ exporter_endpoint_ttl_seconds | int }}" \
+            "{{ exporter_endpoint_max_age_seconds | int }}" \
+            "{{ exporter_filter_rfc1918 | bool | ternary('true', 'false') }}" \
+            "{{ exporter_filter_bogons | bool | ternary('true', 'false') }}" \
+            "{{ exporter_filter_loopback | bool | ternary('true', 'false') }}")
+
+          WL_FEED_PATH=""
+          if [ "$CONFIGURE_WL" = "true" ]; then
+            WL_FEED_PATH=$(ensure_exporter_endpoint \
+              "{{ exporter_whitelist_endpoint_name }}" \
+              "{{ vault_whitelist_group_name }}" \
+              "{{ exporter_endpoint_ttl_seconds | int }}" \
+              "{{ exporter_endpoint_max_age_seconds | int }}" \
+              "{{ exporter_whitelist_filter_rfc1918 | bool | ternary('true', 'false') }}" \
+              "{{ exporter_whitelist_filter_bogons | bool | ternary('true', 'false') }}" \
+              "{{ exporter_whitelist_filter_loopback | bool | ternary('true', 'false') }}")
           fi
 
-          FEED_PATH=$(printf '%s' "$EP_OBJ" | jq -r '.feed_path')
-          jq -nc --arg fp "$FEED_PATH" --argjson ch "$CHANGED" '{feed_path: $fp, changed: $ch}'
+          jq -nc \
+            --arg fp "$BAN_FEED_PATH" \
+            --arg wfp "$WL_FEED_PATH" \
+            --argjson ch "$CHANGED" \
+            '{feed_path: $fp, whitelist_feed_path: $wfp, changed: $ch}'
       args:
         executable: /bin/bash
       register: exporter_ep_raw
       changed_when: (exporter_ep_raw.stdout | default('{}', true) | from_json).changed | default(false)
       no_log: true
 
-    - name: Set effective exporter feed URL fact
+    - name: Set effective exporter feed URL facts
       ansible.builtin.set_fact:
         exporter_feed_path: "{{ (exporter_ep_raw.stdout | from_json).feed_path }}"
         effective_exporter_feed_url: "{{ effective_exporter_host_url ~ (exporter_ep_raw.stdout | from_json).feed_path }}"
+        exporter_whitelist_feed_path: "{{ (exporter_ep_raw.stdout | from_json).whitelist_feed_path | default('') }}"
+        effective_whitelist_feed_url: >-
+          {{
+            (effective_exporter_host_url ~ (exporter_ep_raw.stdout | from_json).whitelist_feed_path)
+            if (((exporter_ep_raw.stdout | from_json).whitelist_feed_path | default('') | length) > 0)
+            else ''
+          }}
       when:
         - exporter_ep_raw.stdout is defined
         - exporter_ep_raw.stdout | trim | length > 0
 
-    - name: Update firewall.get.list with live simply_ip_exporter feed URL
+    - name: Update firewall.get.list with live simply_ip_exporter feed URLs
       ansible.builtin.template:
         src: "{{ role_path }}/../firewall/templates/firewall.get.list.j2"
         dest: "{{ firewall_dir }}/firewall.get.list"
@@ -1087,17 +1336,20 @@
         group: root
         mode: "0700"
       register: get_list_update_res
-      when: effective_exporter_feed_url | default('') | length > 0
+      when: (effective_exporter_feed_url | default('') | length > 0) or (exporter_whitelist_feed_path | default('') | length > 0)
 
-    - name: Refresh host blocklist cache from simply_ip_exporter after firewall.get.list update
+    - name: Refresh host blocklist and whitelist caches from simply_ip_exporter after firewall.get.list update
       ansible.builtin.shell:
         cmd: |
           set -euo pipefail
-          for _ in $(seq 1 5); do
-            if curl -fsS --max-time 3 "{{ effective_exporter_feed_url }}" >/dev/null 2>&1; then
-              break
-            fi
-            sleep 1
+          for url in "{{ effective_exporter_feed_url | default('') }}" "{{ effective_whitelist_feed_url | default('') }}"; do
+            [ -n "$url" ] || continue
+            for _ in $(seq 1 5); do
+              if curl -fsS --max-time 3 "$url" >/dev/null 2>&1; then
+                break
+              fi
+              sleep 1
+            done
           done
           {{ firewall_dir }}/firewall.get.list || true
           {{ firewall_dir }}/firewall.set.ip || true
@@ -1304,17 +1556,36 @@
       - "Vault Mode: {{ vault_mode }}"
       - "Effective Vault Container URL: {{ effective_vault_container_url }}"
       - "Effective Vault Host URL: {{ effective_vault_host_url }}"
-      - "Vault Target Group: {{ vault_group_name }}"
+      - "Vault Banlist Group: {{ vault_group_name }}"
       - "Vault IPv6 /48 Normalization: {{ vault_normalize_ipv6_to_48 | bool }}"
       - "Firewall Block Webhook (send_normalized_ipv6=true): {{ 'Enabled' if (vault_enable_ban_webhook | bool and (vault_mode == 'local' or (vault_ban_webhook_url | default('') | length > 0))) else 'Skipped' }}"
       - "AbuseIPDB Integration (send_normalized_ipv6=false): {{ 'Enabled' if (abuseipdb_api_key | default('') | length > 0) else 'Skipped (no API key provided)' }}"
-      - "Simply IP Exporter Feed URL: {{ effective_exporter_feed_url if (effective_exporter_feed_url | default('') | length > 0) else 'Disabled (deploy_simply_ip_exporter=false)' }}"
+      - "Simply White List Service: {{ ('Enabled (host http://127.0.0.1:3005 -> isolate:3004)') if (deploy_simply_white_list | bool) else 'Disabled (deploy_simply_white_list=false)' }}"
+      - "Vault Whitelist Group & Target ipset: {{ (vault_whitelist_group_name ~ ' -> ' ~ (firewall_whitelist_ipset_name | default('special_guest'))) if (effective_configure_vault_whitelist | bool or (deploy_simply_white_list | bool)) else 'Disabled' }}"
+      - "Whitelist Webhooks (Allow + Revoke, send_normalized_ipv6=false): {{ 'Enabled' if (effective_configure_vault_whitelist | bool and (vault_mode == 'local' or (vault_whitelist_webhook_url | default('') | length > 0))) else 'Skipped' }}"
+      - "Simply IP Exporter Banlist Feed URL: {{ effective_exporter_feed_url if (effective_exporter_feed_url | default('') | length > 0) else 'Disabled (deploy_simply_ip_exporter=false)' }}"
+      - "Simply IP Exporter Whitelist Feed URL: {{ effective_whitelist_feed_url if (effective_whitelist_feed_url | default('') | length > 0) else 'Disabled' }}"
       - "Simply IP Sync Feeds Configured: {{ 'Yes (Problematics IPS + VPN)' if (deploy_simply_ip_sync | bool) else 'No (deploy_simply_ip_sync=false)' }}"
+      - "Compose 'ext' Network Exposure: {{ 'hook_executor=' ~ (hook_executor_allow_ext_network | bool | string) ~ ', ip_vault=' ~ (vault_allow_ext_network | bool | string) ~ ', white_list=' ~ (white_list_allow_ext_network | bool | string) ~ ' (fw_rules_manager & ip_exporter strictly isolate-only)' }}"
       - "Hook Executor Host SSH Target: {{ docker_gateway_isolate_ip }}:{{ effective_sshd_port }}"
       - "Hook Report ID: {{ hook_id_report | default('N/A') }}"
       - "Hook Block ID: {{ hook_id_block | default('N/A') }}"
+      - "Hook Allow ID: {{ hook_id_allow | default('N/A') }}"
       - "Hook Reload ID: {{ hook_id_reload | default('N/A') }}"
       - "Hook Update Containers ID: {{ hook_id_update_containers | default('N/A') }}"
+
+- name: Warn when local simply_ip_vault is isolate-only while outbound peering or AbuseIPDB is enabled
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: vault_allow_ext_network is false, so local simply_ip_vault is attached ONLY to the
+      internal 'isolate' Docker network (no outbound NAT). Outbound requests from simply_ip_vault
+      (AbuseIPDB Report webhook or remote Vault peering) cannot leave Docker until you set
+      vault_allow_ext_network=true or uncomment the 'ext:' network block on simply_ip_vault in
+      {{ compose_dir }}/docker-compose.yml.
+  when:
+    - vault_mode == 'local'
+    - not (vault_allow_ext_network | default(false) | bool)
+    - (abuseipdb_api_key | default('') | length > 0) or (peer_vault_url is defined and peer_vault_url | length > 0)
 
 - name: Notify when remote vault peering is configured
   ansible.builtin.debug:

@@ -12,6 +12,17 @@
       - {{ net_name }}
 {% endif %}
 {%- endmacro %}
+{% macro service_net_commented(net_name, ipv4, ipv6) %}
+{% if docker_pin_container_ips | default(true) | bool %}
+      # {{ net_name }}:
+      #   ipv4_address: {{ ipv4 }}
+{% if (docker_pin_container_ipv6 | default(true) | bool) and (ipv6 | default('') | length > 0) %}
+      #   ipv6_address: {{ ipv6 }}
+{% endif %}
+{% else %}
+      # - {{ net_name }}
+{% endif %}
+{%- endmacro %}
 services:
 
 {% if database_type == 'postgres_container' %}
@@ -115,7 +126,6 @@ services:
       - "/var/tmp:exec,mode=777"
     networks:
 {{ service_net(docker_net_isolate_name, docker_container_ips.simply_fw_rules_manager.isolate_ipv4, docker_container_ips.simply_fw_rules_manager.isolate_ipv6) }}
-{{ service_net(docker_net_ext_name, docker_container_ips.simply_fw_rules_manager.ext_ipv4, docker_container_ips.simply_fw_rules_manager.ext_ipv6) }}
     depends_on:
       - socket_proxy
 {% if database_type == 'postgres_container' %}
@@ -158,8 +168,11 @@ services:
       - "/var/tmp:exec,mode=777"
     networks:
 {{ service_net(docker_net_isolate_name, docker_container_ips.simply_hook_executor.isolate_ipv4, docker_container_ips.simply_hook_executor.isolate_ipv6) }}
-{% if hook_executor_allow_ext_network %}
+{% if hook_executor_allow_ext_network | default(false) | bool %}
 {{ service_net(docker_net_ext_name, docker_container_ips.simply_hook_executor.ext_ipv4, docker_container_ips.simply_hook_executor.ext_ipv6) }}
+{% else %}
+      # Uncomment to attach '{{ docker_net_ext_name }}' if external callers/networks require it:
+{{ service_net_commented(docker_net_ext_name, docker_container_ips.simply_hook_executor.ext_ipv4, docker_container_ips.simply_hook_executor.ext_ipv6) }}
 {% endif %}
 {% if database_type == 'postgres_container' %}
     depends_on:
@@ -229,7 +242,12 @@ services:
       - "/var/tmp:exec,mode=777"
     networks:
 {{ service_net(docker_net_isolate_name, docker_container_ips.simply_ip_vault.isolate_ipv4, docker_container_ips.simply_ip_vault.isolate_ipv6) }}
+{% if vault_allow_ext_network | default(false) | bool %}
 {{ service_net(docker_net_ext_name, docker_container_ips.simply_ip_vault.ext_ipv4, docker_container_ips.simply_ip_vault.ext_ipv6) }}
+{% else %}
+      # Uncomment to attach '{{ docker_net_ext_name }}' if external webhooks (e.g. AbuseIPDB) or peers require it:
+{{ service_net_commented(docker_net_ext_name, docker_container_ips.simply_ip_vault.ext_ipv4, docker_container_ips.simply_ip_vault.ext_ipv6) }}
+{% endif %}
 {% if database_type == 'postgres_container' %}
     depends_on:
       postgres:
@@ -316,8 +334,96 @@ services:
       - "/tmp:exec,mode=777"
       - "/var/tmp:exec,mode=777"
     networks:
-{{ service_net(docker_net_ext_name, docker_container_ips.simply_ip_exporter.ext_ipv4, docker_container_ips.simply_ip_exporter.ext_ipv6) }}
 {{ service_net(docker_net_isolate_name, docker_container_ips.simply_ip_exporter.isolate_ipv4, docker_container_ips.simply_ip_exporter.isolate_ipv6) }}
+{% endif %}
+
+{% if deploy_simply_white_list | default(false) | bool %}
+  simply_white_list:
+    image: {{ image_white_list }}
+    container_name: simply_white_list
+    hostname: simply_white_list
+    restart: unless-stopped
+    user: "{{ user_white_list }}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    expose:
+      - "3004"
+    secrets:
+      - whitelist_encryption_key
+      - whitelist_vault_api_key
+      - whitelist_vault_signing_secret
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        export WHITELIST_ENCRYPTION_KEY="$(tr -d '\r\n' < /run/secrets/whitelist_encryption_key)"
+        if [ -s /run/secrets/whitelist_vault_api_key ]; then
+          export VAULT_API_KEY="$(tr -d '\r\n' < /run/secrets/whitelist_vault_api_key)"
+        fi
+        if [ -s /run/secrets/whitelist_vault_signing_secret ]; then
+          export VAULT_SIGNING_SECRET="$(tr -d '\r\n' < /run/secrets/whitelist_vault_signing_secret)"
+        fi
+        exec /usr/local/bin/simply_white_list
+    environment:
+      - TZ=Europe/Paris
+      - HOST=0.0.0.0
+      - PORT=3004
+      - RUST_LOG={{ container_log_level }}
+{% if database_type == 'postgres_container' %}
+      - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_container_name }}:5432/{{ postgres_db_name }}
+{% elif database_type == 'postgres_external' %}
+      - DATABASE_URL=postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_external_host }}:{{ postgres_external_port }}/{{ postgres_db_name }}
+{% else %}
+      - DATABASE_URL=sqlite:///app/data/simply_white_list.db?mode=rwc
+{% endif %}
+{% set _effective_wl_vault_url = effective_vault_container_url | default(effective_vault_url | default('http://simply_ip_vault:3000' if vault_mode == 'local' else remote_vault_url)) %}
+      - VAULT_BASE_URL={{ _effective_wl_vault_url }}
+      - VAULT_DELETE_HARD={{ white_list_vault_delete_hard | default(false) | bool | ternary('true', 'false') }}
+      - DEFAULT_LINK_TTL_HOURS={{ white_list_default_link_ttl_hours | default(24) | int }}
+      - MAX_LINK_TTL_HOURS={{ white_list_max_link_ttl_hours | default(72) | int }}
+      - DEFAULT_LINK_MAX_USES={{ white_list_default_link_max_uses | default(1) | int }}
+      - MAX_LINK_MAX_USES={{ white_list_max_link_max_uses | default(1) | int }}
+      - DEFAULT_WHITELIST_DURATION_DAYS={{ white_list_default_duration_days | default(1) | int }}
+      - MAX_WHITELIST_DURATION_DAYS={{ white_list_max_duration_days | default(0) | int }}
+      - WHITELIST_CLEANUP_HOUR={{ white_list_cleanup_hour | default(5) | int }}
+      - WHITELIST_CLEANUP_MINUTE={{ white_list_cleanup_minute | default(0) | int }}
+{% if white_list_trusted_proxies | default('') | length > 0 %}
+      - TRUSTED_PROXIES={{ white_list_trusted_proxies }}
+{% endif %}
+{% if white_list_ipv4_probe_url | default('') | length > 0 %}
+      - IPV4_PROBE_URL={{ white_list_ipv4_probe_url }}
+{% endif %}
+{% if white_list_ipv6_probe_url | default('') | length > 0 %}
+      - IPV6_PROBE_URL={{ white_list_ipv6_probe_url }}
+{% endif %}
+    volumes:
+      - {{ compose_dir }}/config_simply_white_list:/app/data:rw
+      - /etc/localtime:/etc/localtime:ro
+    tmpfs:
+      - "/run:exec,mode=777"
+      - "/tmp:exec,mode=777"
+      - "/var/tmp:exec,mode=777"
+    networks:
+{{ service_net(docker_net_isolate_name, docker_container_ips.simply_white_list.isolate_ipv4, docker_container_ips.simply_white_list.isolate_ipv6) }}
+{% if white_list_allow_ext_network | default(false) | bool %}
+{{ service_net(docker_net_ext_name, docker_container_ips.simply_white_list.ext_ipv4, docker_container_ips.simply_white_list.ext_ipv6) }}
+{% else %}
+      # Uncomment to attach '{{ docker_net_ext_name }}' if exposed behind a reverse proxy on '{{ docker_net_ext_name }}':
+{{ service_net_commented(docker_net_ext_name, docker_container_ips.simply_white_list.ext_ipv4, docker_container_ips.simply_white_list.ext_ipv6) }}
+{% endif %}
+{% if database_type == 'postgres_container' or (vault_mode == 'local' and (deploy_simply_ip_vault | default(true) | bool)) %}
+    depends_on:
+{% if database_type == 'postgres_container' %}
+      postgres:
+        condition: service_healthy
+{% endif %}
+{% if vault_mode == 'local' and (deploy_simply_ip_vault | default(true) | bool) %}
+      simply_ip_vault:
+        condition: service_started
+{% endif %}
+{% endif %}
 {% endif %}
 
 secrets:
@@ -339,6 +445,12 @@ secrets:
     file: {{ firewall_secrets_dir }}/vault_api_key.txt
   vault_signing_secret:
     file: {{ firewall_secrets_dir }}/vault_signing_secret.txt
+  whitelist_encryption_key:
+    file: {{ firewall_secrets_dir }}/whitelist_encryption_key.txt
+  whitelist_vault_api_key:
+    file: {{ firewall_secrets_dir }}/whitelist_vault_api_key.txt
+  whitelist_vault_signing_secret:
+    file: {{ firewall_secrets_dir }}/whitelist_vault_signing_secret.txt
 
 networks:
   {{ docker_net_ext_name }}:

@@ -77,7 +77,7 @@ add_doh6()
 add_ipaut()
 {
 	local target_set="${IPSLISTGOODIP:-${IPSLISTAUT}}"
-	$IPS create "$target_set" hash:ip maxelem 999999999 2> /dev/null
+	$IPS create "$target_set" hash:net maxelem 999999999 2> /dev/null
 	$IPS flush "$target_set" 2> /dev/null
 	# Ajout des IPV4s autorisées
 	local IP
@@ -88,11 +88,12 @@ add_ipaut()
 			if [ -f "${hosts_deny_file}" ]; then
 				$SED -i "/^ALL: ${IP} : DENY/d" "${hosts_deny_file}" 2> /dev/null
 			fi
+		elif is_ipv4_net "$IP"; then
+			$IPS add "$target_set" "$IP" -exist 2> /dev/null &
 		fi
 	done
-	if [ -f /etc/firewall/to_allow.ipv4 ]; then
-		awk -v set="$target_set" '$1 ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/ { print "add " set " " $1 " -exist" }' /etc/firewall/to_allow.ipv4 2>/dev/null | $IPS restore -! 2>/dev/null &
-	fi
+	awk -v set="$target_set" '$1 ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/ { print "add " set " " $1 " -exist" }' \
+		/etc/firewall/to_allow.ipv4 /etc/firewall/firewall.allow.ip "/etc/firewall/firewall.allow.${target_set}.ip" 2>/dev/null | $IPS restore -! 2>/dev/null &
 	wait
 	return 0
 }
@@ -100,18 +101,79 @@ add_ipaut()
 add_ipaut6()
 {
 	local target_set="${IPSLISTGOODIP:-${IPSLISTAUT}}6"
-	$IPS create "$target_set" hash:ip maxelem 999999999 family inet6 2> /dev/null
+	local base_set="${IPSLISTGOODIP:-${IPSLISTAUT}}"
+	$IPS create "$target_set" hash:net maxelem 999999999 family inet6 2> /dev/null
 	$IPS flush "$target_set" 2> /dev/null
 	local IP
 	for IP in "${IPAutor[@]}"; do
-		if is_ipv6 "$IP"; then
+		if is_ipv6 "$IP" || is_ipv6_net "$IP"; then
 			$IPS add "$target_set" "$IP" -exist 2> /dev/null &
 		fi
 	done
-	if [ -f /etc/firewall/to_allow.ipv6 ]; then
-		awk -v set="$target_set" '$1 ~ /^[a-fA-F0-9:]+(\/[0-9]{1,3})?$/ { print "add " set " " $1 " -exist" }' /etc/firewall/to_allow.ipv6 2>/dev/null | $IPS restore -! 2>/dev/null &
-	fi
+	awk -v set="$target_set" '$1 ~ /^[a-fA-F0-9:]+:[a-fA-F0-9:]*(\/[0-9]{1,3})?$/ { print "add " set " " $1 " -exist" }' \
+		/etc/firewall/to_allow.ipv6 /etc/firewall/firewall.allow.ip6 "/etc/firewall/firewall.allow.${base_set}.ip6" 2>/dev/null | $IPS restore -! 2>/dev/null &
 	wait
+	return 0
+}
+
+sync_custom_whitelists()
+{
+	local good_base="${IPSLISTGOODIP:-good_ip}"
+	local fw_dir="${FW_DIR:-/etc/firewall}"
+	declare -A sets_to_sync=()
+	local f base set_name
+
+	if [ -n "${FIREWALL_WHITELIST_IPSET:-}" ] && [[ "${FIREWALL_WHITELIST_IPSET}" =~ ^[a-zA-Z0-9_-]+$ ]] && [ "${FIREWALL_WHITELIST_IPSET}" != "${good_base}" ]; then
+		sets_to_sync["${FIREWALL_WHITELIST_IPSET}"]=1
+	fi
+
+	for f in "${fw_dir}"/to_allow.*.ipv4 "${fw_dir}"/to_allow.*.ipv6 "${fw_dir}"/firewall.allow.*.ip "${fw_dir}"/firewall.allow.*.ip6; do
+		[ -e "$f" ] || continue
+		base=$(basename "$f")
+		if [[ "${base}" =~ ^to_allow\.([a-zA-Z0-9_-]+)\.ipv[46]$ ]]; then
+			set_name="${BASH_REMATCH[1]}"
+		elif [[ "${base}" =~ ^firewall\.allow\.([a-zA-Z0-9_-]+)\.ip6?$ ]]; then
+			set_name="${BASH_REMATCH[1]}"
+		else
+			continue
+		fi
+		[ "${set_name}" = "${good_base}" ] && continue
+		sets_to_sync["${set_name}"]=1
+	done
+
+	for set_name in "${!sets_to_sync[@]}"; do
+		local tmp_v4="/tmp/temp_wl_${set_name}"
+		local tmp_v6="/tmp/temp_wl_${set_name}6"
+		$IPS create "${set_name}" hash:net maxelem 999999999 2> /dev/null
+		$IPS create "temp_wl_${set_name}" hash:net maxelem 999999999 2> /dev/null && \
+			$IPS flush "temp_wl_${set_name}" 2> /dev/null
+		$IPS save "temp_wl_${set_name}" > "${tmp_v4}" && $IPS destroy "temp_wl_${set_name}" 2> /dev/null
+		awk -v set="temp_wl_${set_name}" '$1 ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/ { print "add " set " " $1 " -exist" }' \
+			"${fw_dir}/to_allow.${set_name}.ipv4" "${fw_dir}/firewall.allow.${set_name}.ip" 2>/dev/null >> "${tmp_v4}"
+		$IPS restore -! < "${tmp_v4}" 2>/dev/null
+		$IPS swap "temp_wl_${set_name}" "${set_name}" 2>/dev/null || {
+			$IPS flush "${set_name}" 2>/dev/null
+			awk -v set="${set_name}" '$1 ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/ { print "add " set " " $1 " -exist" }' \
+				"${fw_dir}/to_allow.${set_name}.ipv4" "${fw_dir}/firewall.allow.${set_name}.ip" 2>/dev/null | $IPS restore -! 2>/dev/null
+		}
+		$IPS destroy "temp_wl_${set_name}" 2>/dev/null
+		rm -f "${tmp_v4}"
+
+		$IPS create "${set_name}6" hash:net maxelem 999999999 family inet6 2> /dev/null
+		$IPS create "temp_wl_${set_name}6" hash:net maxelem 999999999 family inet6 2> /dev/null && \
+			$IPS flush "temp_wl_${set_name}6" 2> /dev/null
+		$IPS save "temp_wl_${set_name}6" > "${tmp_v6}" && $IPS destroy "temp_wl_${set_name}6" 2> /dev/null
+		awk -v set="temp_wl_${set_name}6" '$1 ~ /^[a-fA-F0-9:]+:[a-fA-F0-9:]*(\/[0-9]{1,3})?$/ { print "add " set " " $1 " -exist" }' \
+			"${fw_dir}/to_allow.${set_name}.ipv6" "${fw_dir}/firewall.allow.${set_name}.ip6" 2>/dev/null >> "${tmp_v6}"
+		$IPS restore -! < "${tmp_v6}" 2>/dev/null
+		$IPS swap "temp_wl_${set_name}6" "${set_name}6" 2>/dev/null || {
+			$IPS flush "${set_name}6" 2>/dev/null
+			awk -v set="${set_name}6" '$1 ~ /^[a-fA-F0-9:]+:[a-fA-F0-9:]*(\/[0-9]{1,3})?$/ { print "add " set " " $1 " -exist" }' \
+				"${fw_dir}/to_allow.${set_name}.ipv6" "${fw_dir}/firewall.allow.${set_name}.ip6" 2>/dev/null | $IPS restore -! 2>/dev/null
+		}
+		$IPS destroy "temp_wl_${set_name}6" 2>/dev/null
+		rm -f "${tmp_v6}"
+	done
 	return 0
 }
 
@@ -292,6 +354,7 @@ add_ip_plex &
 add_country_open_set &
 
 /etc/firewall/firewall.get.list
+sync_custom_whitelists &
 add_ipblock &
 add_ipblock6 &
 

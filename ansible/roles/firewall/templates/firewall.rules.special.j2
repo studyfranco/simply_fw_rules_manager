@@ -17,15 +17,37 @@ source {{ firewall_dir }}/firewall.tools
 insert_rules_with_test_ok_ipv4 "-I INPUT 1 -i {{ docker_net_isolate_name }} -s {{ _hook_ssh_src_v4 }} -d {{ docker_gateway_isolate_ip }} -p tcp --dport {{ effective_sshd_port }} -m state --state NEW,ESTABLISHED -j ACCEPT" ""
 insert_rules_with_test_ok_ipv6 "-I INPUT 1 -i {{ docker_net_isolate_name }} -s {{ _hook_ssh_src_v6 }} -p tcp --dport {{ effective_sshd_port }} -m state --state NEW,ESTABLISHED -j ACCEPT" ""
 
+{% if (configure_vault_whitelist | default(false) | bool or deploy_simply_white_list | default(false) | bool) and ((firewall_whitelist_ipset_name | default('special_guest')) == 'special_guest') %}
+# ------------------------------------------------------------------------------
+# Scoped Dynamic Whitelist ('special_guest' / 'special_guest6')
+# Promotes dynamic Vault/simply_white_list guests from World-Wide ($CHAINMAINOUTINTERWW)
+# to Country-Restricted service ports ($CHAINMAINOUTINTERCR) without granting full good_ip admin bypass.
+# ------------------------------------------------------------------------------
+add_whitelist_special_guest() {
+    $IPS create special_guest hash:net maxelem 999999999 2> /dev/null
+    $IPS create special_guest6 hash:net maxelem 999999999 family inet6 2> /dev/null
+    insert_rules_with_test_ok_ipv4 "-I ${CHAINMAINOUTINTERWW} 1 -m set --match-set special_guest src -g ${CHAINMAINOUTINTERCR}" "" &
+    insert_rules_with_test_ok_ipv4 "-t nat -I ${CHAINMAINOUTINTERWW} 1 -m set --match-set special_guest src -g ${CHAINMAINOUTINTERCR}" "" &
+    insert_rules_with_test_ok_ipv6 "-I ${CHAINMAINOUTINTERWW} 1 -m set --match-set special_guest6 src -g ${CHAINMAINOUTINTERCR}" "" &
+    insert_rules_with_test_ok_ipv6 "-t nat -I ${CHAINMAINOUTINTERWW} 1 -m set --match-set special_guest6 src -g ${CHAINMAINOUTINTERCR}" "" &
+    wait
+    return 0
+}
+
+add_whitelist_special_guest &
+{% endif %}
+
 # ------------------------------------------------------------------------------
 # Custom Rules & Dynamic Helpers
 # ------------------------------------------------------------------------------
 add_special_access() {
-    # Add any site-specific ipset or container rules here
+    # Example custom tiered whitelist (like MainServ custom sets):
+    #   $IPS create custom_vip hash:net maxelem 999999999 2> /dev/null
+    #   insert_rules_with_test_ok_ipv4 "-I ${CHAINMAINOUTINTERWW} 1 -m set --match-set custom_vip src -p tcp --dport 32400 -j ACCEPT" ""
     return 0
 }
 
-add_special_access
+add_special_access &
 
 wait
 exit 0
