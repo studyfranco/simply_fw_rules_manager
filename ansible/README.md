@@ -81,19 +81,22 @@ flowchart TD
 
 ---
 
-## 2. Firewall-Managed Loopback Mapping (`localDockerTCP`)
+## 2. Pinned Container IPs & Loopback Mapping (`localDockerTCP`)
 
-`docker-compose.yml` uses `expose:` only (no `ports:`). When `firewall.settings` is active, `/etc/firewall/firewall` maps host loopback `127.0.0.1` ports to container bridges via `localDockerTCP`:
+`docker-compose.yml` uses `expose:` only (no `ports:`) and pins static IPv4/IPv6 addresses (`docker_pin_container_ips: true`, `docker_pin_container_ipv6: true`) in the reserved high host range (`.250.10..17` / `:fa10..fa17`) so container IPs never drift across restarts or collide with Docker dynamic IPAM allocations (`.0.2+`). When `firewall.settings` is active, `/etc/firewall/firewall` maps host loopback `127.0.0.1` ports to container bridges via `localDockerTCP`:
 
-| Service | Host Loopback (`localDockerTCP`) | Container Port (`expose`) | Purpose |
-| :--- | :--- | :--- | :--- |
-| **`simply_ip_vault`** | `127.0.0.1:3000` | `3000` | Central IP banlist/whitelist Vault & webhook dispatcher |
-| **`simply_hook_executor`** | `127.0.0.1:3001` | `3000` | SSH/local hook runner (`firewall-report`, `firewall-block-ip`, `firewall-reload`, `docker-update-containers`) |
-| **`simply_ip_exporter`** | `127.0.0.1:3002` | `3002` | Raw IP/CIDR feed exporter (`/feed/v1/<token>/list.txt`, optional) |
-| **`simply_ip_sync`** | `127.0.0.1:3003` | `3003` | External threat feed aggregator & Vault syncer (optional) |
-| **`simply_fw_rules_manager`** | `127.0.0.1:3004` | `3000` | Firewall configuration & rule deployment UI/API |
+| Service | Host Loopback (`localDockerTCP`) | Pinned `isolate` IPv4 / IPv6 | Pinned `ext` IPv4 / IPv6 | Port (`expose`) | Purpose |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`simply_fw_rules_manager`** | `127.0.0.1:3004` | `10.123.250.10` / `fd10:1993:1000:1199::2:fa10` | `10.124.250.10` / `fd10:1993:1000:1199::1:fa10` | `3000` | Firewall configuration & rule deployment UI/API |
+| **`simply_hook_executor`** | `127.0.0.1:3001` | `10.123.250.11` / `fd10:1993:1000:1199::2:fa11` | `10.124.250.11` / `fd10:1993:1000:1199::1:fa11` *(opt)* | `3000` | SSH/local hook runner (`firewall-report`, `firewall-block-ip`, `firewall-reload`, `docker-update-containers`) |
+| **`simply_ip_vault`** | `127.0.0.1:3000` | `10.123.250.12` / `fd10:1993:1000:1199::2:fa12` | `10.124.250.12` / `fd10:1993:1000:1199::1:fa12` | `3000` | Central IP banlist/whitelist Vault & webhook dispatcher |
+| **`simply_ip_sync`** | `127.0.0.1:3003` | `10.123.250.13` / `fd10:1993:1000:1199::2:fa13` | `10.124.250.13` / `fd10:1993:1000:1199::1:fa13` | `3003` | External threat feed aggregator & Vault syncer (optional) |
+| **`simply_ip_exporter`** | `127.0.0.1:3002` | `10.123.250.14` / `fd10:1993:1000:1199::2:fa14` | `10.124.250.14` / `fd10:1993:1000:1199::1:fa14` | `3002` | Raw IP/CIDR feed exporter (`/feed/v1/<token>/list.txt`, optional) |
+| **`socket_proxy`** | `—` | `10.123.250.15` / `fd10:1993:1000:1199::2:fa15` | `—` | `2375` | Read-only Docker API proxy for `simply_fw_rules_manager` |
+| **`simply_postgres`** | `—` | `10.123.250.16` / `fd10:1993:1000:1199::2:fa16` | `—` | `5432` | Optional containerized PostgreSQL database |
+| **`fail2ban`** | `—` | `10.123.250.17` / `fd10:1993:1000:1199::2:fa17` | `—` | `—` | Log-based intrusion prevention calling `simply_hook_executor` |
 
-> Host scripts (`firewall.report`, `firewall.get.list`) also resolve live container bridge IPs dynamically via `get_container_ipv4_on_network` in `firewall.tools` with automatic fallback to `127.0.0.1`.
+> Host scripts (`firewall.report`, `firewall.get.list`) resolve live container bridge IPs via `get_container_ipv4_on_network` in `firewall.tools` and fall back to the pinned bridge IP (or `127.0.0.1` if pinning is disabled). `firewall.rules.special` also restricts `isolate` SSH access strictly to `simply_hook_executor`'s pinned IP (`10.123.250.11` / `fd10:1993:1000:1199::2:fa11`).
 
 ---
 
@@ -217,6 +220,9 @@ ansible-playbook playbooks/05_vault_integration.yml
 | `sshd_port` | `22` | Fallback SSH port if not detected in `/etc/ssh/sshd_config`. |
 | `docker_net_isolate_ipv4_subnet` | `"10.123.0.0/16"` | IPv4 subnet for the isolated bridge network. |
 | `docker_net_ext_ipv4_subnet` | `"10.124.0.0/16"` | IPv4 subnet for the external bridge network. |
+| `docker_pin_container_ips` | `true` | Pin static IPv4/IPv6 addresses (`docker_container_ips`) inside `docker-compose.yml`. |
+| `docker_pin_container_ipv6` | `true` | Pin static `ipv6_address` alongside `ipv4_address` (requires IPv6 IPAM on bridges). |
+| `docker_container_ips` | `.250.10..17` / `:fa10..fa17` | Per-container static IPs on `isolate` and `ext`. |
 | `blocklist_update_schedule` | `"*-*-* 03:00:00"` | Systemd OnCalendar schedule for blocklist updates. |
 | `daily_reload_schedule` | `"*-*-* 04:00:00"` | Systemd OnCalendar schedule for daily full firewall reload. |
 | `container_update_schedule` | `"Mon *-*-* 05:00:00"` | Systemd OnCalendar schedule for weekly container upgrades. |

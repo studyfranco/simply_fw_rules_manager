@@ -99,7 +99,11 @@
       {{
         ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).vault_ip) ~ ':3000')
         if (vault_mode == 'local' and ((live_container_ips_raw.stdout | default('{}') | from_json).vault_ip | default('') | length > 0))
-        else ('http://127.0.0.1:3000' if (vault_mode == 'local') else remote_vault_url)
+        else (
+          ('http://' ~ docker_container_ips.simply_ip_vault.ext_ipv4 ~ ':3000')
+          if (vault_mode == 'local' and (docker_pin_container_ips | default(true) | bool))
+          else ('http://127.0.0.1:3000' if (vault_mode == 'local') else remote_vault_url)
+        )
       }}
     effective_vault_url: "{{ 'http://simply_ip_vault:3000' if (vault_mode == 'local') else remote_vault_url }}"
     effective_vault_api_key: >-
@@ -118,7 +122,7 @@
       {{
         ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).hook_ip) ~ ':3000')
         if ((live_container_ips_raw.stdout | default('{}') | from_json).hook_ip | default('') | length > 0)
-        else 'http://127.0.0.1:3001'
+        else (('http://' ~ docker_container_ips.simply_hook_executor.isolate_ipv4 ~ ':3000') if (docker_pin_container_ips | default(true) | bool) else 'http://127.0.0.1:3001')
       }}
     effective_hook_container_url: "http://simply_hook_executor:3000"
     effective_hook_api_key: "{{ hostvars[inventory_hostname].local_hook_api_key | default(extracted_master_creds.hook_key, true) | default('', true) }}"
@@ -127,7 +131,7 @@
       {{
         ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).fw_ip) ~ ':3000')
         if ((live_container_ips_raw.stdout | default('{}') | from_json).fw_ip | default('') | length > 0)
-        else 'http://127.0.0.1:3004'
+        else (('http://' ~ docker_container_ips.simply_fw_rules_manager.isolate_ipv4 ~ ':3000') if (docker_pin_container_ips | default(true) | bool) else 'http://127.0.0.1:3004')
       }}
     effective_fw_api_key: "{{ hostvars[inventory_hostname].local_fw_api_key | default(extracted_master_creds.fw_key, true) | default('', true) }}"
     effective_fw_signing_secret: "{{ hostvars[inventory_hostname].local_fw_signing_secret | default(extracted_master_creds.fw_sec, true) | default('', true) }}"
@@ -135,7 +139,7 @@
       {{
         ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).exporter_ip) ~ ':3002')
         if ((live_container_ips_raw.stdout | default('{}') | from_json).exporter_ip | default('') | length > 0)
-        else 'http://127.0.0.1:3002'
+        else (('http://' ~ docker_container_ips.simply_ip_exporter.ext_ipv4 ~ ':3002') if (docker_pin_container_ips | default(true) | bool) else 'http://127.0.0.1:3002')
       }}
     effective_exporter_api_key: "{{ hostvars[inventory_hostname].local_exporter_api_key | default(extracted_master_creds.exp_key, true) | default('', true) }}"
     effective_exporter_signing_secret: "{{ hostvars[inventory_hostname].local_exporter_signing_secret | default(extracted_master_creds.exp_sec, true) | default('', true) }}"
@@ -143,7 +147,7 @@
       {{
         ('http://' ~ ((live_container_ips_raw.stdout | default('{}') | from_json).sync_ip) ~ ':3003')
         if ((live_container_ips_raw.stdout | default('{}') | from_json).sync_ip | default('') | length > 0)
-        else 'http://127.0.0.1:3003'
+        else (('http://' ~ docker_container_ips.simply_ip_sync.ext_ipv4 ~ ':3003') if (docker_pin_container_ips | default(true) | bool) else 'http://127.0.0.1:3003')
       }}
     effective_sync_api_key: "{{ hostvars[inventory_hostname].local_sync_api_key | default(extracted_master_creds.sync_key, true) | default('', true) }}"
     effective_sync_signing_secret: "{{ hostvars[inventory_hostname].local_sync_signing_secret | default(extracted_master_creds.sync_sec, true) | default('', true) }}"

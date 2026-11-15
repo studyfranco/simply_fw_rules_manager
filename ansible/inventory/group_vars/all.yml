@@ -67,6 +67,47 @@ docker_net_isolate_ipv4_subnet: "10.123.0.0/16"
 docker_net_isolate_ipv6_subnet: "fd10:1993:1000:1199::2:0/112"
 docker_gateway_isolate_ip: "10.123.0.1"
 
+# Static Container IP Pinning in docker-compose.yml
+# Uses reserved high host ranges (.250.10+ / :fa10+) inside 'isolate' and 'ext'
+# to prevent IP drift on restart/recreate and avoid colliding with Docker dynamic IPAM (.0.2+).
+docker_pin_container_ips: true
+docker_pin_container_ipv6: true
+docker_container_ips:
+  simply_fw_rules_manager:
+    isolate_ipv4: "10.123.250.10"
+    isolate_ipv6: "fd10:1993:1000:1199::2:fa10"
+    ext_ipv4: "10.124.250.10"
+    ext_ipv6: "fd10:1993:1000:1199::1:fa10"
+  simply_hook_executor:
+    isolate_ipv4: "10.123.250.11"
+    isolate_ipv6: "fd10:1993:1000:1199::2:fa11"
+    ext_ipv4: "10.124.250.11"
+    ext_ipv6: "fd10:1993:1000:1199::1:fa11"
+  simply_ip_vault:
+    isolate_ipv4: "10.123.250.12"
+    isolate_ipv6: "fd10:1993:1000:1199::2:fa12"
+    ext_ipv4: "10.124.250.12"
+    ext_ipv6: "fd10:1993:1000:1199::1:fa12"
+  simply_ip_sync:
+    isolate_ipv4: "10.123.250.13"
+    isolate_ipv6: "fd10:1993:1000:1199::2:fa13"
+    ext_ipv4: "10.124.250.13"
+    ext_ipv6: "fd10:1993:1000:1199::1:fa13"
+  simply_ip_exporter:
+    isolate_ipv4: "10.123.250.14"
+    isolate_ipv6: "fd10:1993:1000:1199::2:fa14"
+    ext_ipv4: "10.124.250.14"
+    ext_ipv6: "fd10:1993:1000:1199::1:fa14"
+  socket_proxy:
+    isolate_ipv4: "10.123.250.15"
+    isolate_ipv6: "fd10:1993:1000:1199::2:fa15"
+  postgres:
+    isolate_ipv4: "10.123.250.16"
+    isolate_ipv6: "fd10:1993:1000:1199::2:fa16"
+  fail2ban:
+    isolate_ipv4: "10.123.250.17"
+    isolate_ipv6: "fd10:1993:1000:1199::2:fa17"
+
 # Firewall Directory & System Locations
 firewall_dir: "/etc/firewall"
 compose_dir: "{{ firewall_dir }}"

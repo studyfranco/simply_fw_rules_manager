@@ -187,6 +187,23 @@
       {{ docker_net_isolate_name }}
   when: containers_check_net_isolate.rc != 0
 
+- name: Verify existing Docker networks support pinned IPv6 addresses when IPv6 pinning is enabled
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      for net in "{{ docker_net_ext_name }}" "{{ docker_net_isolate_name }}"; do
+        if ! docker network inspect "$net" | jq -e '.[0].IPAM.Config[]? | select(.Subnet | contains(":"))' >/dev/null 2>&1; then
+          echo "Existing Docker network '$net' has no IPv6 subnet in IPAM; recreate it with --ipv6 or set docker_pin_container_ipv6=false." >&2
+          exit 1
+        fi
+      done
+  args:
+    executable: /bin/bash
+  when:
+    - docker_pin_container_ips | default(true) | bool
+    - docker_pin_container_ipv6 | default(true) | bool
+  changed_when: false
+
 - name: Check if master_key file already exists
   ansible.builtin.stat:
     path: "{{ firewall_dir }}/master_key"

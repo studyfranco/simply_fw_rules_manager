@@ -16,7 +16,11 @@ _VAULT_IP="$(get_container_ipv4_on_network "simply_ip_vault" "{{ docker_net_ext_
 if [ -n "$_VAULT_IP" ]; then
     URL_API="http://${_VAULT_IP}:3000"
 else
+{% if docker_pin_container_ips | default(true) | bool %}
+    URL_API="http://{{ docker_container_ips.simply_ip_vault.ext_ipv4 }}:3000"
+{% else %}
     URL_API="{{ effective_vault_host_url | default('http://127.0.0.1:3000') }}"
+{% endif %}
 fi
 {% else %}
 URL_API="{{ effective_vault_host_url | default(remote_vault_url) }}"

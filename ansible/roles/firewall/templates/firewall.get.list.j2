@@ -8,10 +8,10 @@ source {{ firewall_dir }}/firewall.settings
 source {{ firewall_dir }}/firewall.tools
 
 {% if exporter_feed_path is defined and exporter_feed_path | length > 0 %}
-# Simply IP Exporter Local Feed (resolved dynamically on Docker bridge or via localDockerTCP loopback)
+# Simply IP Exporter Local Feed (resolved dynamically on Docker bridge with pinned IP or localDockerTCP fallback)
 _EXPORTER_IP="$(get_container_ipv4_on_network "simply_ip_exporter" "{{ docker_net_ext_name }}")"
 [ -z "$_EXPORTER_IP" ] && _EXPORTER_IP="$(get_container_ipv4_on_network "simply_ip_exporter" "{{ docker_net_isolate_name }}")"
-_EXPORTER_FEED_URL="http://${_EXPORTER_IP:-127.0.0.1}:3002{{ exporter_feed_path }}"
+_EXPORTER_FEED_URL="http://${_EXPORTER_IP:-{{ docker_container_ips.simply_ip_exporter.ext_ipv4 if (docker_pin_container_ips | default(true) | bool) else '127.0.0.1' }}}:3002{{ exporter_feed_path }}"
 generate_list "${_EXPORTER_FEED_URL}" "local_abuse" &
 {% elif effective_exporter_feed_url is defined and effective_exporter_feed_url | length > 0 %}
 # Simply IP Exporter Remote / Custom Feed (aggregated via simply_ip_sync & simply_ip_vault)

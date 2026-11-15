@@ -1,6 +1,17 @@
 # ==============================================================================
 # Managed by Ansible: Simply Firewall Ecosystem Docker Compose
 # ==============================================================================
+{% macro service_net(net_name, ipv4, ipv6) %}
+{% if docker_pin_container_ips | default(true) | bool %}
+      {{ net_name }}:
+        ipv4_address: {{ ipv4 }}
+{% if (docker_pin_container_ipv6 | default(true) | bool) and (ipv6 | default('') | length > 0) %}
+        ipv6_address: {{ ipv6 }}
+{% endif %}
+{% else %}
+      - {{ net_name }}
+{% endif %}
+{%- endmacro %}
 services:
 
 {% if database_type == 'postgres_container' %}
@@ -21,7 +32,7 @@ services:
     volumes:
       - {{ compose_dir }}/postgres_data:/var/lib/postgresql/data:rw
     networks:
-      - {{ docker_net_isolate_name }}
+{{ service_net(docker_net_isolate_name, docker_container_ips.postgres.isolate_ipv4, docker_container_ips.postgres.isolate_ipv6) }}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U {{ postgres_user }} -d {{ postgres_db_name }}"]
       interval: 10s
@@ -56,7 +67,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
-      - {{ docker_net_isolate_name }}
+{{ service_net(docker_net_isolate_name, docker_container_ips.socket_proxy.isolate_ipv4, docker_container_ips.socket_proxy.isolate_ipv6) }}
 
   simply_fw_rules_manager:
     image: {{ image_fw_rules_manager }}
@@ -103,8 +114,8 @@ services:
       - "/tmp:exec,mode=777"
       - "/var/tmp:exec,mode=777"
     networks:
-      - {{ docker_net_isolate_name }}
-      - {{ docker_net_ext_name }}
+{{ service_net(docker_net_isolate_name, docker_container_ips.simply_fw_rules_manager.isolate_ipv4, docker_container_ips.simply_fw_rules_manager.isolate_ipv6) }}
+{{ service_net(docker_net_ext_name, docker_container_ips.simply_fw_rules_manager.ext_ipv4, docker_container_ips.simply_fw_rules_manager.ext_ipv6) }}
     depends_on:
       - socket_proxy
 {% if database_type == 'postgres_container' %}
@@ -146,9 +157,9 @@ services:
       - "/tmp:exec,mode=777"
       - "/var/tmp:exec,mode=777"
     networks:
-      - {{ docker_net_isolate_name }}
+{{ service_net(docker_net_isolate_name, docker_container_ips.simply_hook_executor.isolate_ipv4, docker_container_ips.simply_hook_executor.isolate_ipv6) }}
 {% if hook_executor_allow_ext_network %}
-      - {{ docker_net_ext_name }}
+{{ service_net(docker_net_ext_name, docker_container_ips.simply_hook_executor.ext_ipv4, docker_container_ips.simply_hook_executor.ext_ipv6) }}
 {% endif %}
 {% if database_type == 'postgres_container' %}
     depends_on:
@@ -177,7 +188,7 @@ services:
       - /run:mode=777
       - /tmp:mode=777
     networks:
-      - {{ docker_net_isolate_name }}
+{{ service_net(docker_net_isolate_name, docker_container_ips.fail2ban.isolate_ipv4, docker_container_ips.fail2ban.isolate_ipv6) }}
     depends_on:
       - simply_hook_executor
 
@@ -217,8 +228,8 @@ services:
       - "/tmp:exec,mode=777"
       - "/var/tmp:exec,mode=777"
     networks:
-      - {{ docker_net_isolate_name }}
-      - {{ docker_net_ext_name }}
+{{ service_net(docker_net_isolate_name, docker_container_ips.simply_ip_vault.isolate_ipv4, docker_container_ips.simply_ip_vault.isolate_ipv6) }}
+{{ service_net(docker_net_ext_name, docker_container_ips.simply_ip_vault.ext_ipv4, docker_container_ips.simply_ip_vault.ext_ipv6) }}
 {% if database_type == 'postgres_container' %}
     depends_on:
       postgres:
@@ -261,8 +272,8 @@ services:
       - "/tmp:exec,mode=777"
       - "/var/tmp:exec,mode=777"
     networks:
-      - {{ docker_net_ext_name }}
-      - {{ docker_net_isolate_name }}
+{{ service_net(docker_net_ext_name, docker_container_ips.simply_ip_sync.ext_ipv4, docker_container_ips.simply_ip_sync.ext_ipv6) }}
+{{ service_net(docker_net_isolate_name, docker_container_ips.simply_ip_sync.isolate_ipv4, docker_container_ips.simply_ip_sync.isolate_ipv6) }}
 {% endif %}
 
 {% if deploy_simply_ip_exporter %}
@@ -305,8 +316,8 @@ services:
       - "/tmp:exec,mode=777"
       - "/var/tmp:exec,mode=777"
     networks:
-      - {{ docker_net_ext_name }}
-      - {{ docker_net_isolate_name }}
+{{ service_net(docker_net_ext_name, docker_container_ips.simply_ip_exporter.ext_ipv4, docker_container_ips.simply_ip_exporter.ext_ipv6) }}
+{{ service_net(docker_net_isolate_name, docker_container_ips.simply_ip_exporter.isolate_ipv4, docker_container_ips.simply_ip_exporter.isolate_ipv6) }}
 {% endif %}
 
 secrets:
