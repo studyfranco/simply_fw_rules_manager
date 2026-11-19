@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::api::audit::record_audit;
 use crate::crypto::generate_signing_secret;
-use crate::entities::api_key;
+use crate::entities::api_key::{self, ScopeAccess};
 use crate::entities::prelude::ApiKey;
 use crate::error::AppError;
 use crate::extract::{StrictJson, StrictPath};
@@ -27,18 +27,31 @@ use crate::state::AppState;
 /// Serialized API key summary (never exposes key hash or signing secret).
 #[derive(Debug, Serialize)]
 pub struct ApiKeyResponse {
+    /// API key UUID.
     pub id: Uuid,
+    /// Display name.
     pub name: String,
+    /// First 8 characters of the bearer key.
     pub prefix: String,
+    /// Whether this row is the pinned Master key.
     pub is_master: bool,
-    pub can_manage_keys: bool,
-    pub can_manage_settings: bool,
-    pub can_manage_special_rules: bool,
-    pub can_manage_blocklists: bool,
-    pub can_deploy_and_reload: bool,
+    /// Permission to manage sub-keys.
+    pub can_manage_keys: ScopeAccess,
+    /// Permission to view/edit firewall settings, zone rules, and Docker rules.
+    pub can_manage_settings: ScopeAccess,
+    /// Permission to view/edit `firewall.rules.special`.
+    pub can_manage_special_rules: ScopeAccess,
+    /// Permission to view/edit blocklists.
+    pub can_manage_blocklists: ScopeAccess,
+    /// Permission to deploy configs and trigger reload hooks.
+    pub can_deploy_and_reload: ScopeAccess,
+    /// Parent key UUID for delegated keys.
     pub parent_key_id: Option<Uuid>,
+    /// Optional comma-separated allowed client IPs/CIDRs.
     pub bound_ips: Option<String>,
+    /// UTC creation timestamp.
     pub created_at: DateTime<Utc>,
+    /// UTC modification timestamp.
     pub updated_at: DateTime<Utc>,
 }
 
@@ -65,16 +78,27 @@ impl From<api_key::Model> for ApiKeyResponse {
 /// One-time response returned on key creation or rotation.
 #[derive(Debug, Serialize)]
 pub struct CreatedApiKeyResponse {
+    /// Newly created key UUID.
     pub id: Uuid,
+    /// Display name.
     pub name: String,
+    /// 8-character bearer key prefix.
     pub prefix: String,
+    /// Plaintext `X-API-Key` value (shown once).
     pub raw_key: String,
+    /// Plaintext HMAC-SHA256 signing secret (shown once).
     pub signing_secret: String,
-    pub can_manage_keys: bool,
-    pub can_manage_settings: bool,
-    pub can_manage_special_rules: bool,
-    pub can_manage_blocklists: bool,
-    pub can_deploy_and_reload: bool,
+    /// Permission to manage sub-keys.
+    pub can_manage_keys: ScopeAccess,
+    /// Permission to manage firewall settings.
+    pub can_manage_settings: ScopeAccess,
+    /// Permission to manage `firewall.rules.special`.
+    pub can_manage_special_rules: ScopeAccess,
+    /// Permission to manage blocklists.
+    pub can_manage_blocklists: ScopeAccess,
+    /// Permission to deploy and trigger reload hooks.
+    pub can_deploy_and_reload: ScopeAccess,
+    /// Optional comma-separated IP/CIDR restrictions.
     pub bound_ips: Option<String>,
 }
 
@@ -82,17 +106,24 @@ pub struct CreatedApiKeyResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateApiKeyRequest {
+    /// Display name for the new key.
     pub name: String,
+    /// Delegate key management (Master only).
     #[serde(default)]
-    pub can_manage_keys: bool,
+    pub can_manage_keys: ScopeAccess,
+    /// Delegate settings management (Master only).
     #[serde(default)]
-    pub can_manage_settings: bool,
+    pub can_manage_settings: ScopeAccess,
+    /// Delegate special rules management (Master only).
     #[serde(default)]
-    pub can_manage_special_rules: bool,
+    pub can_manage_special_rules: ScopeAccess,
+    /// Delegate blocklists management.
     #[serde(default)]
-    pub can_manage_blocklists: bool,
+    pub can_manage_blocklists: ScopeAccess,
+    /// Delegate deploy/reload actions.
     #[serde(default)]
-    pub can_deploy_and_reload: bool,
+    pub can_deploy_and_reload: ScopeAccess,
+    /// Optional IP/CIDR restrictions.
     pub bound_ips: Option<String>,
 }
 
@@ -100,13 +131,29 @@ pub struct CreateApiKeyRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateApiKeyRequest {
+    /// Updated display name.
     pub name: Option<String>,
+    /// Updated `can_manage_keys` flag.
     pub can_manage_keys: Option<bool>,
+    /// Updated `can_manage_settings` flag.
     pub can_manage_settings: Option<bool>,
+    /// Updated `can_manage_special_rules` flag.
     pub can_manage_special_rules: Option<bool>,
+    /// Updated `can_manage_blocklists` flag.
     pub can_manage_blocklists: Option<bool>,
+    /// Updated `can_deploy_and_reload` flag.
     pub can_deploy_and_reload: Option<bool>,
+    /// Updated comma-separated IP/CIDR restrictions.
     pub bound_ips: Option<String>,
+}
+
+#[derive(Copy, Clone)]
+struct ScopeGrantSet {
+    manage_keys: ScopeAccess,
+    manage_settings: ScopeAccess,
+    manage_special_rules: ScopeAccess,
+    manage_blocklists: ScopeAccess,
+    deploy_and_reload: ScopeAccess,
 }
 
 fn validate_bound_ips(raw: Option<&str>) -> Result<Option<String>, AppError> {
@@ -130,20 +177,24 @@ fn validate_bound_ips(raw: Option<&str>) -> Result<Option<String>, AppError> {
 
 fn check_subset_delegation(
     caller: &api_key::Model,
-    can_manage_keys: bool,
-    can_manage_settings: bool,
-    can_manage_special_rules: bool,
-    can_manage_blocklists: bool,
-    can_deploy_and_reload: bool,
+    requested: ScopeGrantSet,
 ) -> Result<(), AppError> {
     if caller.is_master {
         return Ok(());
     }
-    if (can_manage_keys && !caller.can_manage_keys)
-        || (can_manage_settings && !caller.can_manage_settings)
-        || (can_manage_special_rules && !caller.can_manage_special_rules)
-        || (can_manage_blocklists && !caller.can_manage_blocklists)
-        || (can_deploy_and_reload && !caller.can_deploy_and_reload)
+    // RBAC R4: Non-Master Parent keys may never grant `can_manage_keys` or global Master-only
+    // scopes (`can_manage_settings`, `can_manage_special_rules`).
+    if requested.manage_keys.is_granted()
+        || requested.manage_settings.is_granted()
+        || requested.manage_special_rules.is_granted()
+    {
+        return Err(AppError::Forbidden(
+            "Only the Master key may grant can_manage_keys, can_manage_settings, or can_manage_special_rules"
+                .to_owned(),
+        ));
+    }
+    if (requested.manage_blocklists.is_granted() && !caller.can_manage_blocklists.is_granted())
+        || (requested.deploy_and_reload.is_granted() && !caller.can_deploy_and_reload.is_granted())
     {
         return Err(AppError::Forbidden(
             "Cannot grant permissions that the delegating key does not possess".to_owned(),
@@ -167,7 +218,7 @@ pub async fn list_api_keys(
 ) -> Result<Json<Vec<ApiKeyResponse>>, AppError> {
     let mut select = ApiKey::find().order_by_asc(api_key::Column::CreatedAt);
     if !caller.is_master {
-        if caller.can_manage_keys {
+        if caller.can_manage_keys.is_granted() {
             select = select.filter(
                 Condition::any()
                     .add(api_key::Column::Id.eq(caller.id))
@@ -191,7 +242,7 @@ pub async fn create_api_key(
     Extension(client_ip): Extension<ClientIp>,
     StrictJson(payload): StrictJson<CreateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<CreatedApiKeyResponse>), AppError> {
-    if !caller.is_master && !caller.can_manage_keys {
+    if !caller.is_master && !caller.can_manage_keys.is_granted() {
         return Err(AppError::Forbidden(
             "Missing can_manage_keys permission".to_owned(),
         ));
@@ -203,14 +254,14 @@ pub async fn create_api_key(
         ));
     }
 
-    check_subset_delegation(
-        &caller,
-        payload.can_manage_keys,
-        payload.can_manage_settings,
-        payload.can_manage_special_rules,
-        payload.can_manage_blocklists,
-        payload.can_deploy_and_reload,
-    )?;
+    let requested = ScopeGrantSet {
+        manage_keys: payload.can_manage_keys,
+        manage_settings: payload.can_manage_settings,
+        manage_special_rules: payload.can_manage_special_rules,
+        manage_blocklists: payload.can_manage_blocklists,
+        deploy_and_reload: payload.can_deploy_and_reload,
+    };
+    check_subset_delegation(&caller, requested)?;
 
     let bound_ips = validate_bound_ips(payload.bound_ips.as_deref())?;
 
@@ -282,7 +333,7 @@ pub async fn update_api_key(
     StrictPath(id): StrictPath<Uuid>,
     StrictJson(payload): StrictJson<UpdateApiKeyRequest>,
 ) -> Result<Json<ApiKeyResponse>, AppError> {
-    if !caller.is_master && !caller.can_manage_keys {
+    if !caller.is_master && !caller.can_manage_keys.is_granted() {
         return Err(AppError::Forbidden(
             "Missing can_manage_keys permission".to_owned(),
         ));
@@ -329,28 +380,25 @@ pub async fn update_api_key(
         return Err(AppError::NotFound);
     }
 
-    let new_manage_keys = payload.can_manage_keys.unwrap_or(target.can_manage_keys);
-    let new_settings = payload
-        .can_manage_settings
-        .unwrap_or(target.can_manage_settings);
-    let new_special = payload
-        .can_manage_special_rules
-        .unwrap_or(target.can_manage_special_rules);
-    let new_blocklists = payload
-        .can_manage_blocklists
-        .unwrap_or(target.can_manage_blocklists);
-    let new_deploy = payload
-        .can_deploy_and_reload
-        .unwrap_or(target.can_deploy_and_reload);
+    let requested = ScopeGrantSet {
+        manage_keys: payload
+            .can_manage_keys
+            .map_or(target.can_manage_keys, ScopeAccess::from),
+        manage_settings: payload
+            .can_manage_settings
+            .map_or(target.can_manage_settings, ScopeAccess::from),
+        manage_special_rules: payload
+            .can_manage_special_rules
+            .map_or(target.can_manage_special_rules, ScopeAccess::from),
+        manage_blocklists: payload
+            .can_manage_blocklists
+            .map_or(target.can_manage_blocklists, ScopeAccess::from),
+        deploy_and_reload: payload
+            .can_deploy_and_reload
+            .map_or(target.can_deploy_and_reload, ScopeAccess::from),
+    };
 
-    check_subset_delegation(
-        &caller,
-        new_manage_keys,
-        new_settings,
-        new_special,
-        new_blocklists,
-        new_deploy,
-    )?;
+    check_subset_delegation(&caller, requested)?;
 
     let mut active: api_key::ActiveModel = target.into();
     if let Some(name) = payload.name {
@@ -362,11 +410,11 @@ pub async fn update_api_key(
         }
         active.name = Set(trimmed);
     }
-    active.can_manage_keys = Set(new_manage_keys);
-    active.can_manage_settings = Set(new_settings);
-    active.can_manage_special_rules = Set(new_special);
-    active.can_manage_blocklists = Set(new_blocklists);
-    active.can_deploy_and_reload = Set(new_deploy);
+    active.can_manage_keys = Set(requested.manage_keys);
+    active.can_manage_settings = Set(requested.manage_settings);
+    active.can_manage_special_rules = Set(requested.manage_special_rules);
+    active.can_manage_blocklists = Set(requested.manage_blocklists);
+    active.can_deploy_and_reload = Set(requested.deploy_and_reload);
     if payload.bound_ips.is_some() {
         active.bound_ips = Set(validate_bound_ips(payload.bound_ips.as_deref())?);
     }
@@ -396,7 +444,7 @@ pub async fn delete_api_key(
     Extension(client_ip): Extension<ClientIp>,
     StrictPath(id): StrictPath<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    if !caller.is_master && !caller.can_manage_keys {
+    if !caller.is_master && !caller.can_manage_keys.is_granted() {
         return Err(AppError::Forbidden(
             "Missing can_manage_keys permission".to_owned(),
         ));
@@ -442,7 +490,7 @@ pub async fn rotate_api_key(
     Extension(client_ip): Extension<ClientIp>,
     StrictPath(id): StrictPath<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !caller.is_master && !caller.can_manage_keys {
+    if !caller.is_master && !caller.can_manage_keys.is_granted() {
         return Err(AppError::Forbidden(
             "Missing can_manage_keys permission".to_owned(),
         ));
@@ -505,7 +553,7 @@ pub async fn rotate_signing_secret(
     Extension(client_ip): Extension<ClientIp>,
     StrictPath(id): StrictPath<Uuid>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !caller.is_master && !caller.can_manage_keys {
+    if !caller.is_master && !caller.can_manage_keys.is_granted() {
         return Err(AppError::Forbidden(
             "Missing can_manage_keys permission".to_owned(),
         ));

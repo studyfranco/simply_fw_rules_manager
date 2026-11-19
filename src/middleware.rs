@@ -75,13 +75,13 @@ pub async fn auth_middleware(
     req: Request<Body>,
     next: Next,
 ) -> Result<Response, AppError> {
-    let peer_ip = req
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), |ci| ci.0.ip());
+    let Some(ConnectInfo(addr)) = req.extensions().get::<ConnectInfo<SocketAddr>>().copied() else {
+        tracing::error!("Request missing ConnectInfo<SocketAddr>; failing closed");
+        return Err(AppError::Internal);
+    };
     let headers = req.headers().clone();
-    let client_ip =
-        crate::config::resolve_client_ip(peer_ip, &headers, state.trusted_proxies.networks());
+    let trusted_nets = state.trusted_proxies.resolved().await;
+    let client_ip = crate::config::resolve_client_ip(addr.ip(), &headers, &trusted_nets);
 
     let timestamp = validate_timestamp(&headers)?;
 

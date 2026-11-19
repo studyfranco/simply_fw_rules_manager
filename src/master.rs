@@ -1,5 +1,7 @@
 //! Master API key identity pinning and bootstrap seeding.
 
+use std::fmt::Write as FmtWrite;
+use std::io::Write as IoWrite;
 use std::sync::OnceLock;
 
 use chrono::Utc;
@@ -10,6 +12,21 @@ use uuid::Uuid;
 use crate::crypto::{SecretCipher, generate_signing_secret};
 use crate::entities::api_key;
 use crate::entities::prelude::ApiKey;
+
+const MASTER_MARKER_INDEX: &str = "idx_api_keys_master_marker";
+const API_KEYS_TABLE: &str = "api_keys";
+const BANNER_WIDTH: usize = 82;
+
+fn validate_hex_64(env_name: &str, raw: &str) -> Result<String, sea_orm::DbErr> {
+    let trimmed = raw.trim();
+    if trimmed.len() == 64 && trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(trimmed.to_owned())
+    } else {
+        Err(sea_orm::DbErr::Custom(format!(
+            "{env_name} must be exactly 64 hexadecimal characters"
+        )))
+    }
+}
 
 /// Write-once pin to the UUID of the single Master API key.
 pub struct MasterPin {
@@ -39,10 +56,12 @@ impl MasterPin {
         self.cell.get().copied()
     }
 
-    /// Pins the Master identity from the database at startup.
+    /// Pins the Master identity from the database at startup, refusing multiple Masters or a
+    /// missing uniqueness index (`idx_api_keys_master_marker`).
     ///
     /// # Errors
-    /// Returns [`sea_orm::DbErr`] if the database query fails or no Master row exists.
+    /// Returns [`sea_orm::DbErr`] if querying fails, 0 or >1 Master rows exist, or the uniqueness
+    /// index is absent.
     pub async fn pin_at_boot(&self, db: &DatabaseConnection) -> Result<Uuid, sea_orm::DbErr> {
         if let Some(pinned) = self.cell.get() {
             return Ok(*pinned);
@@ -51,9 +70,22 @@ impl MasterPin {
             .filter(api_key::Column::IsMaster.eq(true))
             .all(db)
             .await?;
-        let Some(first) = masters.first() else {
-            return Err(sea_orm::DbErr::Custom("no Master key exists".to_owned()));
+        let first = match masters.as_slice() {
+            [] => return Err(sea_orm::DbErr::Custom("no Master key exists".to_owned())),
+            [sole] => sole,
+            many => {
+                let ids: Vec<String> = many.iter().map(|m| m.id.to_string()).collect();
+                return Err(sea_orm::DbErr::Custom(format!(
+                    "multiple Master keys exist ({}); refusing to boot",
+                    ids.join(", ")
+                )));
+            }
         };
+        if !crate::db::has_index(db, API_KEYS_TABLE, MASTER_MARKER_INDEX).await? {
+            return Err(sea_orm::DbErr::Custom(format!(
+                "unique index '{MASTER_MARKER_INDEX}' is missing from '{API_KEYS_TABLE}'; re-run migrations"
+            )));
+        }
         let _ = self.cell.set(first.id);
         Ok(first.id)
     }
@@ -83,7 +115,7 @@ impl Default for MasterPin {
 /// `INITIAL_MASTER_SIGNING_SECRET` or generating fresh 64-hex credentials at first boot).
 ///
 /// # Errors
-/// Returns [`sea_orm::DbErr`] if querying or inserting the Master key fails.
+/// Returns [`sea_orm::DbErr`] if bootstrap environment secrets are malformed or persistence fails.
 pub async fn ensure_master_key(
     db: &DatabaseConnection,
     cipher: &SecretCipher,
@@ -96,13 +128,25 @@ pub async fn ensure_master_key(
         return Ok(existing.id);
     }
 
-    let raw_key = crate::config::get_secret_or_env(crate::config::INITIAL_MASTER_KEY_ENV)
-        .or_else(|| crate::config::get_secret_or_env("MASTER_API_KEY"))
-        .unwrap_or_else(generate_signing_secret);
+    let raw_key = if let Some(val) =
+        crate::config::get_secret_or_env(crate::config::INITIAL_MASTER_KEY_ENV)
+    {
+        validate_hex_64(crate::config::INITIAL_MASTER_KEY_ENV, &val)?
+    } else if let Some(val) = crate::config::get_secret_or_env("MASTER_API_KEY") {
+        validate_hex_64("MASTER_API_KEY", &val)?
+    } else {
+        generate_signing_secret()
+    };
 
-    let raw_secret = crate::config::get_secret_or_env(crate::config::INITIAL_MASTER_SIGNING_SECRET_ENV)
-        .or_else(|| crate::config::get_secret_or_env("MASTER_SIGNING_SECRET"))
-        .unwrap_or_else(generate_signing_secret);
+    let raw_secret = if let Some(val) =
+        crate::config::get_secret_or_env(crate::config::INITIAL_MASTER_SIGNING_SECRET_ENV)
+    {
+        validate_hex_64(crate::config::INITIAL_MASTER_SIGNING_SECRET_ENV, &val)?
+    } else if let Some(val) = crate::config::get_secret_or_env("MASTER_SIGNING_SECRET") {
+        validate_hex_64("MASTER_SIGNING_SECRET", &val)?
+    } else {
+        generate_signing_secret()
+    };
 
     let mut hasher = Sha256::new();
     hasher.update(raw_key.as_bytes());
@@ -121,11 +165,11 @@ pub async fn ensure_master_key(
         signing_secret: Set(Some(sealed_secret)),
         prefix: Set(prefix),
         is_master: Set(true),
-        can_manage_keys: Set(true),
-        can_manage_settings: Set(true),
-        can_manage_special_rules: Set(true),
-        can_manage_blocklists: Set(true),
-        can_deploy_and_reload: Set(true),
+        can_manage_keys: Set(api_key::ScopeAccess::Granted),
+        can_manage_settings: Set(api_key::ScopeAccess::Granted),
+        can_manage_special_rules: Set(api_key::ScopeAccess::Granted),
+        can_manage_blocklists: Set(api_key::ScopeAccess::Granted),
+        can_deploy_and_reload: Set(api_key::ScopeAccess::Granted),
         parent_key_id: Set(None),
         bound_ips: Set(None),
         created_at: Set(now),
@@ -133,29 +177,56 @@ pub async fn ensure_master_key(
     };
     model.insert(db).await?;
 
-    const W: usize = 82;
-    let border = "═".repeat(W);
+    let border = "═".repeat(BANNER_WIDTH);
     let bound_ip = "ALL (Unrestricted)";
-    let body: String = [
+    let rows = [
         format!("X-API-Key      : {raw_key}"),
         format!("Signing secret : {raw_secret}"),
         format!("Bound IPs      : {bound_ip}"),
         String::new(),
         "Both values are needed to sign requests (X-Timestamp + X-Signature-256).".to_owned(),
         "They will NOT be shown again — store them securely!".to_owned(),
-    ]
-    .iter()
-    .map(|row| format!("║ {row:<W$} ║\n"))
-    .collect();
+    ];
+    let mut body = String::new();
+    for row in rows {
+        let _ = writeln!(body, "║ {row:<BANNER_WIDTH$} ║");
+    }
 
     tracing::info!(
-        "\n╔{border}╗\n║ {:<W$} ║\n╠{border}╣\n{body}╚{border}╝",
+        "\n╔{border}╗\n║ {:<BANNER_WIDTH$} ║\n╠{border}╣\n{body}╚{border}╝",
         "BOOTSTRAP: Master API Key Generated"
     );
 
-    use std::io::Write;
-    std::io::stdout().flush().ok();
-    std::io::stderr().flush().ok();
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
 
     Ok(id)
+}
+
+/// Verifies at boot that the configured encryption key can decrypt existing sealed secrets,
+/// using the Master key's `signing_secret` as a canary.
+///
+/// # Errors
+/// Returns an error message if decryption fails due to an encryption-key mismatch or database error.
+pub async fn verify_encryption_key(
+    db: &DatabaseConnection,
+    cipher: &SecretCipher,
+) -> Result<(), String> {
+    let Some(master) = ApiKey::find()
+        .filter(api_key::Column::IsMaster.eq(true))
+        .one(db)
+        .await
+        .map_err(|e| format!("failed querying Master key canary: {e}"))?
+    else {
+        return Ok(());
+    };
+    let Some(stored) = master.signing_secret.as_deref() else {
+        return Ok(());
+    };
+    cipher.open(stored).map_err(|e| {
+        format!(
+            "FW_ENCRYPTION_KEY does not match the key used to seal stored secrets ({e}); refusing to start"
+        )
+    })?;
+    Ok(())
 }

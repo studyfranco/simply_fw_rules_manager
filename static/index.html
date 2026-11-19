@@ -109,7 +109,7 @@
             <input type="text" id="audit-ip-filter" class="input-field font-mono" placeholder="Filter by client IP...">
             <input type="text" id="audit-key-filter" class="input-field" placeholder="Filter by API key (name or prefix)...">
             <input type="datetime-local" id="audit-since-filter" class="input-field" title="Since (inclusive)">
-            <input type="datetime-local" id="audit-until-filter" class="input-field" title="Until (exclusive)">
+            <input type="datetime-local" id="audit-until-filter" class="input-field" title="Until (inclusive)">
             <button type="button" id="audit-search-btn" class="btn btn-icon" title="Search (or press Enter in a filter field)">🔍</button>
             <button type="button" id="audit-clear-btn" class="btn btn-secondary btn-sm">Clear</button>
           </div>
@@ -165,6 +165,36 @@
     <option value="FIREWALL_GENERATE_AND_RELOAD"></option>
   </datalist>
 
+  <div id="zone-rule-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="zone-rule-modal-title">
+    <div class="modal-card modal-card-form card">
+      <div class="modal-header">
+        <h3 id="zone-rule-modal-title"></h3>
+        <button type="button" class="btn-modal-close" aria-label="Fermer">&times;</button>
+      </div>
+      <div class="modal-editor"></div>
+    </div>
+  </div>
+
+  <div id="docker-rule-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="docker-rule-modal-title">
+    <div class="modal-card modal-card-form card">
+      <div class="modal-header">
+        <h3 id="docker-rule-modal-title"></h3>
+        <button type="button" class="btn-modal-close" aria-label="Fermer">&times;</button>
+      </div>
+      <div class="modal-editor"></div>
+    </div>
+  </div>
+
+  <div id="blocklist-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="blocklist-modal-title">
+    <div class="modal-card modal-card-form card">
+      <div class="modal-header">
+        <h3 id="blocklist-modal-title"></h3>
+        <button type="button" class="btn-modal-close" aria-label="Fermer">&times;</button>
+      </div>
+      <div class="modal-editor"></div>
+    </div>
+  </div>
+
   <!-- Create API Key Modal -->
   <div id="create-key-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="create-key-modal-title">
     <div class="modal-card modal-card-form card">
@@ -198,7 +228,7 @@
         </div>
         <div class="form-actions mt-4">
           <button type="submit" class="btn btn-primary" id="kf-submit-btn">Create Key</button>
-          <button type="button" id="kf-cancel" class="btn btn-secondary">Cancel</button>
+          <button type="button" id="kf-cancel" class="btn btn-cancel">Cancel</button>
         </div>
       </form>
     </div>

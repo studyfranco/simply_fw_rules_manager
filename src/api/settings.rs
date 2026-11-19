@@ -17,6 +17,12 @@ use crate::docker::discover_docker;
 use crate::entities::{api_key, fw_docker_inter_rule, fw_settings, fw_zone_rule};
 use crate::error::AppError;
 use crate::extract::{StrictJson, StrictPath};
+use crate::input_validation::{
+    validate_country_codes, validate_dnat_spec, validate_docker_endpoint,
+    validate_docker_inter_rule, validate_docker_name, validate_hook_name, validate_http_url,
+    validate_interface_name, validate_interface_spec, validate_ip_or_cidr, validate_safe_path,
+    validate_zone_rule_value,
+};
 use crate::middleware::ClientIp;
 use crate::state::AppState;
 
@@ -33,7 +39,7 @@ const VALID_RULE_KINDS: &[&str] = &[
 ];
 
 fn ensure_can_manage_settings(caller: &api_key::Model) -> Result<(), AppError> {
-    if caller.is_master || caller.can_manage_settings {
+    if caller.is_master || caller.can_manage_settings.is_granted() {
         Ok(())
     } else {
         Err(AppError::Forbidden(
@@ -45,29 +51,53 @@ fn ensure_can_manage_settings(caller: &api_key::Model) -> Result<(), AppError> {
 /// Serialized representation of global `firewall.settings` configuration.
 #[derive(Debug, Serialize)]
 pub struct FwSettingsResponse {
+    /// Primary outbound network interface (`mainInter`).
     pub main_inter: String,
+    /// Outbound NAT interfaces (`INTEROut`).
     pub inter_out: Vec<String>,
+    /// Outbound-routed interfaces (`interfaceToGoOutSide`).
     pub interface_to_go_outside: Vec<String>,
+    /// Internal interfaces with local access (`internInterfaceHaveAccessAsLocal`).
     pub intern_interface_have_access_as_local: Vec<String>,
+    /// Local host interfaces (`interfaceLocal`).
     pub interface_local: Vec<String>,
+    /// DHCP flag per interface (`interfaceWithDHCP`).
     pub interface_with_dhcp: BTreeMap<String, bool>,
+    /// Unfiltered interfaces (`interfaceWithNoRules`).
     pub interface_with_no_rules: Vec<String>,
+    /// Docker networks with Internet egress (`dockerNetworkWithInternetAccess`).
     pub docker_network_with_internet_access: Vec<String>,
+    /// Docker networks with host access (`dockerNetworkWithAccess`).
     pub docker_network_with_access: Vec<String>,
+    /// Trusted administrator IP/CIDRs (`IPAutor`).
     pub ip_autor: Vec<String>,
+    /// Trusted DNAT TCP rules (`IPAutorDnatPortTCP`).
     pub ip_autor_dnat_port_tcp: Vec<String>,
+    /// Trusted DNAT UDP rules (`IPAutorDnatPortUDP`).
     pub ip_autor_dnat_port_udp: Vec<String>,
+    /// GeoIP-allowed country codes (`countryOpenPort`).
     pub country_open_port: String,
+    /// Primary GeoIP-blocked country codes (`blockedCountry`).
     pub blocked_country: String,
+    /// Secondary GeoIP-blocked country codes (`blockedCountry2`).
     pub blocked_country_2: String,
+    /// Docker daemon discovery endpoint.
     pub docker_endpoint: String,
+    /// Target directory where generated scripts are written.
     pub output_dir: String,
+    /// Host path to `firewall.tools`.
     pub tools_script_path: String,
+    /// Base URL of `simply_hook_executor`.
     pub hook_executor_url: Option<String>,
-    pub hook_executor_api_key: Option<String>,
+    /// Whether an encrypted `simply_hook_executor` API key is stored.
+    pub has_hook_api_key: bool,
+    /// Whether an encrypted `simply_hook_executor` signing secret is stored.
     pub has_hook_signing_secret: bool,
+    /// Hook name triggered for firewall reload.
     pub hook_reload_name: String,
+    /// Hook name triggered for Docker container sync.
     pub hook_update_containers_name: String,
+    /// UTC timestamp of the last update.
     pub updated_at: DateTime<Utc>,
 }
 
@@ -105,7 +135,10 @@ impl From<fw_settings::Model> for FwSettingsResponse {
             output_dir: m.output_dir,
             tools_script_path: m.tools_script_path,
             hook_executor_url: m.hook_executor_url,
-            hook_executor_api_key: m.hook_executor_api_key,
+            has_hook_api_key: m
+                .hook_executor_api_key
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty()),
             has_hook_signing_secret: m
                 .hook_executor_signing_secret
                 .as_deref()
@@ -121,51 +154,235 @@ impl From<fw_settings::Model> for FwSettingsResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateFwSettingsRequest {
+    /// Updated `mainInter`.
     pub main_inter: Option<String>,
+    /// Updated `INTEROut` list.
     pub inter_out: Option<Vec<String>>,
+    /// Updated `interfaceToGoOutSide` list.
     pub interface_to_go_outside: Option<Vec<String>>,
+    /// Updated `internInterfaceHaveAccessAsLocal` list.
     pub intern_interface_have_access_as_local: Option<Vec<String>>,
+    /// Updated `interfaceLocal` list.
     pub interface_local: Option<Vec<String>>,
+    /// Updated `interfaceWithDHCP` flags.
     pub interface_with_dhcp: Option<BTreeMap<String, bool>>,
+    /// Updated `interfaceWithNoRules` list.
     pub interface_with_no_rules: Option<Vec<String>>,
+    /// Updated `dockerNetworkWithInternetAccess` list.
     pub docker_network_with_internet_access: Option<Vec<String>>,
+    /// Updated `dockerNetworkWithAccess` list.
     pub docker_network_with_access: Option<Vec<String>>,
+    /// Updated `IPAutor` allowlist.
     pub ip_autor: Option<Vec<String>>,
+    /// Updated `IPAutorDnatPortTCP` list.
     pub ip_autor_dnat_port_tcp: Option<Vec<String>>,
+    /// Updated `IPAutorDnatPortUDP` list.
     pub ip_autor_dnat_port_udp: Option<Vec<String>>,
+    /// Updated `countryOpenPort` codes.
     pub country_open_port: Option<String>,
+    /// Updated `blockedCountry` codes.
     pub blocked_country: Option<String>,
+    /// Updated `blockedCountry2` codes.
     pub blocked_country_2: Option<String>,
+    /// Updated Docker daemon endpoint.
     pub docker_endpoint: Option<String>,
+    /// Updated generated output directory.
     pub output_dir: Option<String>,
+    /// Updated `firewall.tools` script path.
     pub tools_script_path: Option<String>,
+    /// Updated `simply_hook_executor` URL.
     pub hook_executor_url: Option<String>,
+    /// New `simply_hook_executor` API key (empty string preserves existing).
     pub hook_executor_api_key: Option<String>,
+    /// New `simply_hook_executor` signing secret (empty string preserves existing).
     pub hook_executor_signing_secret: Option<String>,
+    /// Updated firewall reload hook name.
     pub hook_reload_name: Option<String>,
+    /// Updated container sync hook name.
     pub hook_update_containers_name: Option<String>,
 }
 
-fn sanitize_string_list(items: Vec<String>) -> Vec<String> {
-    items
-        .into_iter()
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .collect()
+fn validate_string_list<F>(items: Vec<String>, validator: F) -> Result<Vec<String>, AppError>
+where
+    F: Fn(&str) -> Result<String, AppError>,
+{
+    let mut out = Vec::new();
+    for raw in items {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        out.push(validator(trimmed)?);
+    }
+    Ok(out)
 }
 
 /// `GET /api/firewall/settings` — Retrieve global firewall settings.
 ///
 /// # Errors
-/// Returns [`AppError`] if the database lookup fails.
+/// Returns [`AppError`] if the caller lacks permissions or the database lookup fails.
 pub async fn get_settings(
     State(state): State<AppState>,
+    Extension(caller): Extension<api_key::Model>,
 ) -> Result<Json<FwSettingsResponse>, AppError> {
+    ensure_can_manage_settings(&caller)?;
     let model = fw_settings::Entity::find_by_id(1)
         .one(&state.db)
         .await?
         .ok_or(AppError::NotFound)?;
     Ok(Json(FwSettingsResponse::from(model)))
+}
+
+fn apply_interface_settings(
+    active: &mut fw_settings::ActiveModel,
+    payload: UpdateFwSettingsRequest,
+) -> Result<UpdateFwSettingsRequest, AppError> {
+    let mut rest = payload;
+    if let Some(main_inter) = rest.main_inter.take() {
+        active.main_inter = Set(validate_interface_name("main_inter", &main_inter)?);
+    }
+    if let Some(v) = rest.inter_out.take() {
+        let valid = validate_string_list(v, |s| validate_interface_spec("inter_out", s))?;
+        active.inter_out_json =
+            Set(serde_json::to_string(&valid).unwrap_or_else(|_| "[]".to_owned()));
+    }
+    if let Some(v) = rest.interface_to_go_outside.take() {
+        let valid =
+            validate_string_list(v, |s| validate_interface_spec("interface_to_go_outside", s))?;
+        active.interface_to_go_outside_json =
+            Set(serde_json::to_string(&valid).unwrap_or_else(|_| "[]".to_owned()));
+    }
+    if let Some(v) = rest.intern_interface_have_access_as_local.take() {
+        let valid = validate_string_list(v, |s| {
+            validate_interface_spec("intern_interface_have_access_as_local", s)
+        })?;
+        active.intern_interface_have_access_as_local_json =
+            Set(serde_json::to_string(&valid).unwrap_or_else(|_| "[]".to_owned()));
+    }
+    if let Some(v) = rest.interface_local.take() {
+        let valid = validate_string_list(v, |s| validate_interface_spec("interface_local", s))?;
+        active.interface_local_json =
+            Set(serde_json::to_string(&valid).unwrap_or_else(|_| "[]".to_owned()));
+    }
+    if let Some(v) = rest.interface_with_dhcp.take() {
+        let mut clean_map = BTreeMap::new();
+        for (iface, enabled) in v {
+            let clean_iface = validate_interface_spec("interface_with_dhcp", &iface)?;
+            clean_map.insert(clean_iface, enabled);
+        }
+        active.interface_with_dhcp_json =
+            Set(serde_json::to_string(&clean_map).unwrap_or_else(|_| "{}".to_owned()));
+    }
+    if let Some(v) = rest.interface_with_no_rules.take() {
+        let valid =
+            validate_string_list(v, |s| validate_interface_spec("interface_with_no_rules", s))?;
+        active.interface_with_no_rules_json =
+            Set(serde_json::to_string(&valid).unwrap_or_else(|_| "[]".to_owned()));
+    }
+    Ok(rest)
+}
+
+fn apply_network_and_country_settings(
+    active: &mut fw_settings::ActiveModel,
+    payload: &mut UpdateFwSettingsRequest,
+) -> Result<(), AppError> {
+    if let Some(v) = payload.docker_network_with_internet_access.take() {
+        let valid = validate_string_list(v, |s| {
+            validate_docker_name("docker_network_with_internet_access", s)
+        })?;
+        active.docker_network_with_internet_access_json =
+            Set(serde_json::to_string(&valid).unwrap_or_else(|_| "[]".to_owned()));
+    }
+    if let Some(v) = payload.docker_network_with_access.take() {
+        let valid =
+            validate_string_list(v, |s| validate_docker_name("docker_network_with_access", s))?;
+        active.docker_network_with_access_json =
+            Set(serde_json::to_string(&valid).unwrap_or_else(|_| "[]".to_owned()));
+    }
+    if let Some(v) = payload.ip_autor.take() {
+        let valid = validate_string_list(v, |s| validate_ip_or_cidr("ip_autor", s))?;
+        active.ip_autor_json =
+            Set(serde_json::to_string(&valid).unwrap_or_else(|_| "[]".to_owned()));
+    }
+    if let Some(v) = payload.ip_autor_dnat_port_tcp.take() {
+        let valid = validate_string_list(v, |s| validate_dnat_spec("ip_autor_dnat_port_tcp", s))?;
+        active.ip_autor_dnat_port_tcp_json =
+            Set(serde_json::to_string(&valid).unwrap_or_else(|_| "[]".to_owned()));
+    }
+    if let Some(v) = payload.ip_autor_dnat_port_udp.take() {
+        let valid = validate_string_list(v, |s| validate_dnat_spec("ip_autor_dnat_port_udp", s))?;
+        active.ip_autor_dnat_port_udp_json =
+            Set(serde_json::to_string(&valid).unwrap_or_else(|_| "[]".to_owned()));
+    }
+    if let Some(v) = payload.country_open_port.take() {
+        active.country_open_port = Set(validate_country_codes("country_open_port", &v)?);
+    }
+    if let Some(v) = payload.blocked_country.take() {
+        active.blocked_country = Set(validate_country_codes("blocked_country", &v)?);
+    }
+    if let Some(v) = payload.blocked_country_2.take() {
+        active.blocked_country_2 = Set(validate_country_codes("blocked_country_2", &v)?);
+    }
+    Ok(())
+}
+
+fn apply_infra_and_hook_settings(
+    state: &AppState,
+    active: &mut fw_settings::ActiveModel,
+    payload: &mut UpdateFwSettingsRequest,
+) -> Result<(), AppError> {
+    if let Some(v) = payload.docker_endpoint.take() {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            active.docker_endpoint = Set(validate_docker_endpoint(trimmed)?);
+        }
+    }
+    if let Some(v) = payload.output_dir.take() {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            active.output_dir = Set(validate_safe_path("output_dir", trimmed)?);
+        }
+    }
+    if let Some(v) = payload.tools_script_path.take() {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            active.tools_script_path = Set(validate_safe_path("tools_script_path", trimmed)?);
+        }
+    }
+    if let Some(v) = payload.hook_executor_url.take() {
+        let trimmed = v.trim();
+        if trimmed.is_empty() {
+            active.hook_executor_url = Set(None);
+        } else {
+            active.hook_executor_url = Set(Some(validate_http_url("hook_executor_url", trimmed)?));
+        }
+    }
+    if let Some(v) = payload.hook_executor_api_key.take() {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            active.hook_executor_api_key = Set(Some(state.cipher.seal(trimmed)?));
+        }
+    }
+    if let Some(v) = payload.hook_executor_signing_secret.take() {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            active.hook_executor_signing_secret = Set(Some(state.cipher.seal(trimmed)?));
+        }
+    }
+    if let Some(v) = payload.hook_reload_name.take() {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            active.hook_reload_name = Set(validate_hook_name("hook_reload_name", trimmed)?);
+        }
+    }
+    if let Some(v) = payload.hook_update_containers_name.take() {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            active.hook_update_containers_name =
+                Set(validate_hook_name("hook_update_containers_name", trimmed)?);
+        }
+    }
+    Ok(())
 }
 
 /// `PUT /api/firewall/settings` — Update global firewall settings.
@@ -186,127 +403,9 @@ pub async fn update_settings(
         .ok_or(AppError::NotFound)?;
 
     let mut active: fw_settings::ActiveModel = existing.into();
-
-    if let Some(main_inter) = payload.main_inter {
-        let trimmed = main_inter.trim().to_owned();
-        if trimmed.is_empty() {
-            return Err(AppError::InvalidInput(
-                "mainInter cannot be empty".to_owned(),
-            ));
-        }
-        active.main_inter = Set(trimmed);
-    }
-    if let Some(v) = payload.inter_out {
-        active.inter_out_json = Set(
-            serde_json::to_string(&sanitize_string_list(v)).unwrap_or_else(|_| "[]".to_owned())
-        );
-    }
-    if let Some(v) = payload.interface_to_go_outside {
-        active.interface_to_go_outside_json = Set(
-            serde_json::to_string(&sanitize_string_list(v)).unwrap_or_else(|_| "[]".to_owned())
-        );
-    }
-    if let Some(v) = payload.intern_interface_have_access_as_local {
-        active.intern_interface_have_access_as_local_json = Set(serde_json::to_string(
-            &sanitize_string_list(v),
-        )
-        .unwrap_or_else(|_| "[]".to_owned()));
-    }
-    if let Some(v) = payload.interface_local {
-        active.interface_local_json = Set(
-            serde_json::to_string(&sanitize_string_list(v)).unwrap_or_else(|_| "[]".to_owned())
-        );
-    }
-    if let Some(v) = payload.interface_with_dhcp {
-        active.interface_with_dhcp_json =
-            Set(serde_json::to_string(&v).unwrap_or_else(|_| "{}".to_owned()));
-    }
-    if let Some(v) = payload.interface_with_no_rules {
-        active.interface_with_no_rules_json = Set(
-            serde_json::to_string(&sanitize_string_list(v)).unwrap_or_else(|_| "[]".to_owned())
-        );
-    }
-    if let Some(v) = payload.docker_network_with_internet_access {
-        active.docker_network_with_internet_access_json = Set(serde_json::to_string(
-            &sanitize_string_list(v),
-        )
-        .unwrap_or_else(|_| "[]".to_owned()));
-    }
-    if let Some(v) = payload.docker_network_with_access {
-        active.docker_network_with_access_json = Set(serde_json::to_string(&sanitize_string_list(
-            v,
-        ))
-        .unwrap_or_else(|_| "[]".to_owned()));
-    }
-    if let Some(v) = payload.ip_autor {
-        active.ip_autor_json = Set(
-            serde_json::to_string(&sanitize_string_list(v)).unwrap_or_else(|_| "[]".to_owned())
-        );
-    }
-    if let Some(v) = payload.ip_autor_dnat_port_tcp {
-        active.ip_autor_dnat_port_tcp_json = Set(
-            serde_json::to_string(&sanitize_string_list(v)).unwrap_or_else(|_| "[]".to_owned())
-        );
-    }
-    if let Some(v) = payload.ip_autor_dnat_port_udp {
-        active.ip_autor_dnat_port_udp_json = Set(
-            serde_json::to_string(&sanitize_string_list(v)).unwrap_or_else(|_| "[]".to_owned())
-        );
-    }
-    if let Some(v) = payload.country_open_port {
-        active.country_open_port = Set(v.trim().to_owned());
-    }
-    if let Some(v) = payload.blocked_country {
-        active.blocked_country = Set(v.trim().to_owned());
-    }
-    if let Some(v) = payload.blocked_country_2 {
-        active.blocked_country_2 = Set(v.trim().to_owned());
-    }
-    if let Some(v) = payload.docker_endpoint {
-        let trimmed = v.trim().to_owned();
-        if !trimmed.is_empty() {
-            active.docker_endpoint = Set(trimmed);
-        }
-    }
-    if let Some(v) = payload.output_dir {
-        let trimmed = v.trim().to_owned();
-        if !trimmed.is_empty() {
-            active.output_dir = Set(trimmed);
-        }
-    }
-    if let Some(v) = payload.tools_script_path {
-        let trimmed = v.trim().to_owned();
-        if !trimmed.is_empty() {
-            active.tools_script_path = Set(trimmed);
-        }
-    }
-    if let Some(v) = payload.hook_executor_url {
-        let trimmed = v.trim().to_owned();
-        active.hook_executor_url = Set((!trimmed.is_empty()).then_some(trimmed));
-    }
-    if let Some(v) = payload.hook_executor_api_key {
-        let trimmed = v.trim().to_owned();
-        active.hook_executor_api_key = Set((!trimmed.is_empty()).then_some(trimmed));
-    }
-    if let Some(v) = payload.hook_executor_signing_secret {
-        let trimmed = v.trim();
-        if !trimmed.is_empty() {
-            let sealed = state.cipher.seal(trimmed)?;
-            active.hook_executor_signing_secret = Set(Some(sealed));
-        }
-    }
-    if let Some(v) = payload.hook_reload_name {
-        let trimmed = v.trim().to_owned();
-        if !trimmed.is_empty() {
-            active.hook_reload_name = Set(trimmed);
-        }
-    }
-    if let Some(v) = payload.hook_update_containers_name {
-        let trimmed = v.trim().to_owned();
-        if !trimmed.is_empty() {
-            active.hook_update_containers_name = Set(trimmed);
-        }
-    }
+    let mut rest = apply_interface_settings(&mut active, payload)?;
+    apply_network_and_country_settings(&mut active, &mut rest)?;
+    apply_infra_and_hook_settings(&state, &mut active, &mut rest)?;
 
     active.updated_at = Set(Utc::now());
     let updated = active.update(&state.db).await?;
@@ -327,16 +426,27 @@ pub async fn update_settings(
 /// Serialized zone rule with live Docker status.
 #[derive(Debug, Serialize)]
 pub struct ZoneRuleResponse {
+    /// Zone rule UUID.
     pub id: Uuid,
+    /// Target firewall zone (`ip_autor`, `internal`, `local`, `open`, `ww`).
     pub zone: String,
+    /// Rule kind (`OpenPortsTCP`, `DockerTCP`, etc.).
     pub rule_kind: String,
+    /// Rule parameter string.
     pub value: String,
+    /// Target container name for Docker rules.
     pub container_name: Option<String>,
+    /// Live container state reported by Docker discovery.
     pub container_status: Option<String>,
+    /// Whether the rule is active.
     pub enabled: bool,
+    /// Optional operator comment.
     pub comment: Option<String>,
+    /// Sort index within the zone.
     pub sort_order: i32,
+    /// UTC creation timestamp.
     pub created_at: DateTime<Utc>,
+    /// UTC modification timestamp.
     pub updated_at: DateTime<Utc>,
 }
 
@@ -344,12 +454,18 @@ pub struct ZoneRuleResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpsertZoneRuleRequest {
+    /// Target firewall zone.
     pub zone: String,
+    /// Rule kind.
     pub rule_kind: String,
+    /// Rule specification value.
     pub value: String,
+    /// Whether the rule is enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Optional operator comment.
     pub comment: Option<String>,
+    /// Ordering priority.
     #[serde(default)]
     pub sort_order: i32,
 }
@@ -358,24 +474,15 @@ const fn default_true() -> bool {
     true
 }
 
-fn extract_container_from_rule(rule_kind: &str, value: &str) -> Option<String> {
-    if rule_kind != "DockerTCP" && rule_kind != "DockerUDP" {
-        return None;
-    }
-    let parts: Vec<&str> = value.split(',').map(str::trim).collect();
-    // Format in firewall.settings: "external_port,network,container_name,container_port"
-    parts
-        .get(2)
-        .and_then(|c| (!c.is_empty()).then(|| (*c).to_owned()))
-}
-
 /// `GET /api/firewall/zones` — List all zone rules enriched with live Docker container state.
 ///
 /// # Errors
-/// Returns [`AppError`] if the database lookup fails.
+/// Returns [`AppError`] if the caller lacks permissions or the database lookup fails.
 pub async fn list_zone_rules(
     State(state): State<AppState>,
+    Extension(caller): Extension<api_key::Model>,
 ) -> Result<Json<Vec<ZoneRuleResponse>>, AppError> {
+    ensure_can_manage_settings(&caller)?;
     let settings = fw_settings::Entity::find_by_id(1).one(&state.db).await?;
     let endpoint = settings
         .as_ref()
@@ -444,19 +551,7 @@ pub async fn create_zone_rule(
                 .to_owned(),
         ));
     }
-    let value = payload.value.trim().to_owned();
-    if value.is_empty() {
-        return Err(AppError::InvalidInput(
-            "Rule value cannot be empty".to_owned(),
-        ));
-    }
-    let container_name = extract_container_from_rule(&rule_kind, &value);
-    if (rule_kind == "DockerTCP" || rule_kind == "DockerUDP") && container_name.is_none() {
-        return Err(AppError::InvalidInput(
-            "DockerTCP/DockerUDP rule must have format 'ext_port,network,container,container_port'"
-                .to_owned(),
-        ));
-    }
+    let (value, container_name) = validate_zone_rule_value(&rule_kind, &payload.value)?;
 
     let now = Utc::now();
     let id = Uuid::new_v4();
@@ -533,13 +628,13 @@ pub async fn update_zone_rule(
             "Invalid rule_kind '{rule_kind}'"
         )));
     }
-    let value = payload.value.trim().to_owned();
-    if value.is_empty() {
+    if zone == "ip_autor" && rule_kind != "DockerTCP" && rule_kind != "DockerUDP" {
         return Err(AppError::InvalidInput(
-            "Rule value cannot be empty".to_owned(),
+            "Zone 'ip_autor' only supports DockerTCP and DockerUDP zone rules (use IPAutor settings for DNAT/trusted IPs)"
+                .to_owned(),
         ));
     }
-    let container_name = extract_container_from_rule(&rule_kind, &value);
+    let (value, container_name) = validate_zone_rule_value(&rule_kind, &payload.value)?;
 
     let mut active: fw_zone_rule::ActiveModel = existing.into();
     active.zone = Set(zone.clone());
@@ -624,18 +719,31 @@ pub async fn delete_zone_rule(
 /// Serialized inter-container flow rule (`dockerAccessBetweenThem`).
 #[derive(Debug, Serialize)]
 pub struct DockerInterRuleResponse {
+    /// Inter-container rule UUID.
     pub id: Uuid,
+    /// Source container name.
     pub source_container: String,
+    /// Live Docker status of the source container.
     pub source_status: String,
+    /// Destination container name.
     pub destination_container: String,
+    /// Live Docker status of the destination container.
     pub destination_status: String,
+    /// Shared Docker bridge network name.
     pub network_name: String,
+    /// Transport protocol (`tcp` or `udp`).
     pub proto: String,
+    /// Semicolon-delimited destination ports or ranges.
     pub ports: String,
+    /// Whether the rule is active.
     pub enabled: bool,
+    /// Optional operator comment.
     pub comment: Option<String>,
+    /// Ordering priority.
     pub sort_order: i32,
+    /// UTC creation timestamp.
     pub created_at: DateTime<Utc>,
+    /// UTC modification timestamp.
     pub updated_at: DateTime<Utc>,
 }
 
@@ -643,14 +751,22 @@ pub struct DockerInterRuleResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpsertDockerInterRuleRequest {
+    /// Source container name.
     pub source_container: String,
+    /// Destination container name.
     pub destination_container: String,
+    /// Shared Docker network name.
     pub network_name: String,
+    /// Transport protocol (`tcp` or `udp`).
     pub proto: String,
+    /// Semicolon-separated destination ports or ranges.
     pub ports: String,
+    /// Whether the rule is enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Optional operator comment.
     pub comment: Option<String>,
+    /// Ordering priority.
     #[serde(default)]
     pub sort_order: i32,
 }
@@ -658,10 +774,12 @@ pub struct UpsertDockerInterRuleRequest {
 /// `GET /api/firewall/docker-rules` — List all inter-container rules with live container statuses.
 ///
 /// # Errors
-/// Returns [`AppError`] if the database lookup fails.
+/// Returns [`AppError`] if the caller lacks permissions or the database lookup fails.
 pub async fn list_docker_inter_rules(
     State(state): State<AppState>,
+    Extension(caller): Extension<api_key::Model>,
 ) -> Result<Json<Vec<DockerInterRuleResponse>>, AppError> {
+    ensure_can_manage_settings(&caller)?;
     let settings = fw_settings::Entity::find_by_id(1).one(&state.db).await?;
     let endpoint = settings
         .as_ref()
@@ -712,23 +830,13 @@ pub async fn create_docker_inter_rule(
 ) -> Result<(StatusCode, Json<DockerInterRuleResponse>), AppError> {
     ensure_can_manage_settings(&caller)?;
 
-    let src = payload.source_container.trim().to_owned();
-    let dst = payload.destination_container.trim().to_owned();
-    let net = payload.network_name.trim().to_owned();
-    let proto = payload.proto.trim().to_ascii_lowercase();
-    let ports = payload.ports.trim().to_owned();
-
-    if src.is_empty() || dst.is_empty() || net.is_empty() || ports.is_empty() {
-        return Err(AppError::InvalidInput(
-            "source_container, destination_container, network_name, and ports are required"
-                .to_owned(),
-        ));
-    }
-    if proto != "tcp" && proto != "udp" {
-        return Err(AppError::InvalidInput(
-            "proto must be 'tcp' or 'udp'".to_owned(),
-        ));
-    }
+    let (src, dst, net, proto, ports) = validate_docker_inter_rule(
+        &payload.source_container,
+        &payload.destination_container,
+        &payload.network_name,
+        &payload.proto,
+        &payload.ports,
+    )?;
 
     let now = Utc::now();
     let id = Uuid::new_v4();
@@ -800,23 +908,13 @@ pub async fn update_docker_inter_rule(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let src = payload.source_container.trim().to_owned();
-    let dst = payload.destination_container.trim().to_owned();
-    let net = payload.network_name.trim().to_owned();
-    let proto = payload.proto.trim().to_ascii_lowercase();
-    let ports = payload.ports.trim().to_owned();
-
-    if src.is_empty() || dst.is_empty() || net.is_empty() || ports.is_empty() {
-        return Err(AppError::InvalidInput(
-            "source_container, destination_container, network_name, and ports are required"
-                .to_owned(),
-        ));
-    }
-    if proto != "tcp" && proto != "udp" {
-        return Err(AppError::InvalidInput(
-            "proto must be 'tcp' or 'udp'".to_owned(),
-        ));
-    }
+    let (src, dst, net, proto, ports) = validate_docker_inter_rule(
+        &payload.source_container,
+        &payload.destination_container,
+        &payload.network_name,
+        &payload.proto,
+        &payload.ports,
+    )?;
 
     let mut active: fw_docker_inter_rule::ActiveModel = existing.into();
     active.source_container = Set(src.clone());

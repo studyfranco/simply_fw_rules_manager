@@ -76,6 +76,7 @@
     - { name: vault_encryption_key, owner: "1124", group: "1124" }
     - { name: exporter_encryption_key, owner: "1125", group: "1125" }
     - { name: whitelist_encryption_key, owner: "1129", group: "1129" }
+    - { name: whitelist_probe_signing_secret, owner: "1129", group: "1129" }
     - { name: hook_executor_signing_secret, owner: "1128", group: "1128" }
     - { name: hook_executor_api_key, owner: "1128", group: "1128" }
     - { name: vault_api_key, owner: "1125", group: "1125" }
@@ -95,6 +96,7 @@
     - { name: vault_encryption_key, owner: "1124", group: "1124" }
     - { name: exporter_encryption_key, owner: "1125", group: "1125" }
     - { name: whitelist_encryption_key, owner: "1129", group: "1129" }
+    - { name: whitelist_probe_signing_secret, owner: "1129", group: "1129" }
     - { name: hook_executor_signing_secret, owner: "1128", group: "1128" }
     - { name: hook_executor_api_key, owner: "1128", group: "1128" }
     - { name: vault_api_key, owner: "1125", group: "1125" }
@@ -300,9 +302,9 @@
         cmd: |
           set -euo pipefail
           OUTPUT_FILE="{{ firewall_dir }}/master_key"
+          umask 077
           rm -f "${OUTPUT_FILE}"
           touch "${OUTPUT_FILE}"
-          chmod 0600 "${OUTPUT_FILE}"
 
           for svc in simply_fw_rules_manager simply_hook_executor simply_ip_vault simply_ip_sync simply_ip_exporter simply_white_list; do
             if docker compose -f {{ compose_dir }}/docker-compose.yml ps --services | grep -q "^${svc}$"; then
@@ -318,6 +320,14 @@
         executable: /bin/bash
       changed_when: true
       no_log: true
+
+    - name: Enforce root-only Master credential file permissions
+      ansible.builtin.file:
+        path: "{{ firewall_dir }}/master_key"
+        state: file
+        owner: root
+        group: root
+        mode: "0600"
 
     - name: Deploy final docker-compose.yml with container_log_level=warn
       ansible.builtin.template:
@@ -349,6 +359,14 @@
 - name: Routine deployment of docker-compose.yml
   when: master_key_file_stat.stat.exists
   block:
+    - name: Enforce root-only Master credential file permissions
+      ansible.builtin.file:
+        path: "{{ firewall_dir }}/master_key"
+        state: file
+        owner: root
+        group: root
+        mode: "0600"
+
     - name: Deploy docker-compose.yml
       ansible.builtin.template:
         src: docker-compose.yml.j2
@@ -406,6 +424,14 @@
       register: master_key_append_res
       changed_when: false
       no_log: true
+
+    - name: Enforce root-only Master credential file permissions
+      ansible.builtin.file:
+        path: "{{ firewall_dir }}/master_key"
+        state: file
+        owner: root
+        group: root
+        mode: "0600"
 
     - name: Reload active firewall rules to bind localDockerTCP and container policies after stack update
       ansible.builtin.shell:

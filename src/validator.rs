@@ -35,23 +35,54 @@ pub struct UndefinedVariableIssue {
     pub context: String,
 }
 
+/// Binary outcome of a validation stage serialized as a JSON boolean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(from = "bool", into = "bool")]
+pub enum CheckStatus {
+    /// Stage failed (or binary not found).
+    #[default]
+    Failed,
+    /// Stage succeeded (or binary found).
+    Passed,
+}
+
+impl CheckStatus {
+    /// Returns `true` when the stage passed.
+    #[must_use]
+    pub const fn is_passed(self) -> bool {
+        matches!(self, Self::Passed)
+    }
+}
+
+impl From<bool> for CheckStatus {
+    fn from(value: bool) -> Self {
+        if value { Self::Passed } else { Self::Failed }
+    }
+}
+
+impl From<CheckStatus> for bool {
+    fn from(value: CheckStatus) -> Self {
+        value.is_passed()
+    }
+}
+
 /// Complete report produced by the 3-stage validation pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationReport {
     /// Overall pass/fail (`bash_n_ok && undefined_variables.is_empty() && shellcheck_errors == 0`).
     pub valid: bool,
     /// Stage 1 (`bash -n`) pass/fail.
-    pub bash_n_ok: bool,
+    pub bash_n_ok: CheckStatus,
     /// Stage 1 (`bash -n`) stderr output.
     pub bash_n_output: String,
     /// Whether the `shellcheck` binary was available on the host.
-    pub shellcheck_available: bool,
+    pub shellcheck_available: CheckStatus,
     /// Stage 2 (`shellcheck`) pass/fail (no error-level findings).
-    pub shellcheck_ok: bool,
+    pub shellcheck_ok: CheckStatus,
     /// Stage 2 (`shellcheck`) formatted findings.
     pub shellcheck_issues: Vec<String>,
     /// Stage 3 variable resolution pass/fail.
-    pub variables_ok: bool,
+    pub variables_ok: CheckStatus,
     /// Stage 3 list of undefined variables (`$CHAIN...`, `$IPS...`, etc.).
     pub undefined_variables: Vec<UndefinedVariableIssue>,
     /// Set of known system constants discovered from `firewall.tools` + `firewall.settings`.
@@ -248,12 +279,12 @@ pub fn validate_special_rules(script_content: &str, tools_path: &Path) -> Valida
 
     ValidationReport {
         valid,
-        bash_n_ok,
+        bash_n_ok: CheckStatus::from(bash_n_ok),
         bash_n_output,
-        shellcheck_available,
-        shellcheck_ok,
+        shellcheck_available: CheckStatus::from(shellcheck_available),
+        shellcheck_ok: CheckStatus::from(shellcheck_ok),
         shellcheck_issues,
-        variables_ok,
+        variables_ok: CheckStatus::from(variables_ok),
         undefined_variables,
         known_constants_count,
     }
@@ -360,16 +391,16 @@ mod tests {
         let tools_path = Path::new("scripts_etc/firewall.tools");
         let valid_script = "#!/bin/bash\nsource /etc/firewall/firewall.tools\ninsert_rules_with_test_ok_ipv4 \"-I $CHAINMAINOUTINTERWW 1 -m set --match-set $IPSLISTGOODIP src -j ACCEPT\"\n";
         let report_ok = validate_special_rules(valid_script, tools_path);
-        assert!(report_ok.bash_n_ok);
+        assert!(report_ok.bash_n_ok.is_passed());
         assert!(
-            report_ok.variables_ok,
+            report_ok.variables_ok.is_passed(),
             "expected no undefined vars, got {:?}",
             report_ok.undefined_variables
         );
 
         let bad_var_script = "#!/bin/bash\ninsert_rules_with_test_ok_ipv4 \"-I $CHAIN_DOES_NOT_EXIST 1 -j ACCEPT\"\n";
         let report_bad_var = validate_special_rules(bad_var_script, tools_path);
-        assert!(!report_bad_var.variables_ok);
+        assert!(!report_bad_var.variables_ok.is_passed());
         assert_eq!(
             report_bad_var.undefined_variables[0].variable,
             "CHAIN_DOES_NOT_EXIST"
@@ -377,6 +408,6 @@ mod tests {
 
         let bad_syntax_script = "#!/bin/bash\nif [ -n \"$IPT\" ; then\necho hi\n";
         let report_bad_syn = validate_special_rules(bad_syntax_script, tools_path);
-        assert!(!report_bad_syn.bash_n_ok);
+        assert!(!report_bad_syn.bash_n_ok.is_passed());
     }
 }

@@ -5,9 +5,10 @@ use std::net::SocketAddr;
 use sea_orm_migration::MigratorTrait;
 use tracing_subscriber::EnvFilter;
 
+use simply_fw_rules_manager::config::{get_secret_or_env, resolve_bind_addr};
 use simply_fw_rules_manager::db::connect;
 use simply_fw_rules_manager::importer::seed_if_empty;
-use simply_fw_rules_manager::master::ensure_master_key;
+use simply_fw_rules_manager::master::{ensure_master_key, verify_encryption_key};
 use simply_fw_rules_manager::migration::Migrator;
 use simply_fw_rules_manager::state::AppState;
 
@@ -22,10 +23,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let db_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "sqlite://data/fw_rules_manager.db?mode=rwc".to_owned());
+    let db_url = get_secret_or_env("DATABASE_URL")
+        .unwrap_or_else(|| "sqlite://data/fw_rules_manager.db?mode=rwc".to_owned());
     if let Some(sqlite_path) = db_url
         .strip_prefix("sqlite://")
+        .or_else(|| db_url.strip_prefix("sqlite:"))
         .and_then(|s| s.split('?').next())
         && sqlite_path != ":memory:"
         && let Some(parent) = std::path::Path::new(sqlite_path).parent()
@@ -39,7 +41,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = AppState::new(db.clone())?;
     let master_id = ensure_master_key(&db, &state.cipher).await?;
+    verify_encryption_key(&db, &state.cipher).await?;
     let _ = state.master_pin.pin_at_boot(&db).await?;
+    state.trusted_proxies.prime_with_grace();
     tracing::info!("Pinned Master API Key identity: {master_id}");
 
     if let Some(summary) = seed_if_empty(&db).await? {
@@ -52,12 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let _ = simply_fw_rules_manager::db::run_sqlite_optimize(&db).await;
-
-    let listen_addr: SocketAddr = std::env::var("LISTEN_ADDR")
-        .or_else(|_| std::env::var("PORT").map(|p| format!("0.0.0.0:{p}")))
-        .unwrap_or_else(|_| "0.0.0.0:3000".to_owned())
-        .parse()?;
+    let listen_addr = resolve_bind_addr()?;
 
     let app = simply_fw_rules_manager::create_app(state);
     let listener = tokio::net::TcpListener::bind(listen_addr).await?;

@@ -1,7 +1,5 @@
 //! File preview, bootstrap import, atomic disk generation, and `simply_hook_executor` trigger endpoints.
 
-use std::path::Path;
-
 use axum::Extension;
 use axum::Json;
 use axum::extract::State;
@@ -16,15 +14,29 @@ use crate::extract::StrictJson;
 use crate::generator::{GeneratedFilesBundle, build_files_bundle, write_bundle_to_disk};
 use crate::hook_client::{HookTriggerResult, trigger_hook};
 use crate::importer::{ImportSummary, import_from_directory};
+use crate::input_validation::confine_import_dir;
 use crate::middleware::ClientIp;
 use crate::state::AppState;
 
 fn ensure_can_deploy(caller: &api_key::Model) -> Result<(), AppError> {
-    if caller.is_master || caller.can_deploy_and_reload {
+    if caller.is_master || caller.can_deploy_and_reload.is_granted() {
         Ok(())
     } else {
         Err(AppError::Forbidden(
             "Missing can_deploy_and_reload permission".to_owned(),
+        ))
+    }
+}
+
+fn ensure_can_preview(caller: &api_key::Model) -> Result<(), AppError> {
+    if caller.is_master
+        || caller.can_deploy_and_reload.is_granted()
+        || caller.can_manage_settings.is_granted()
+    {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(
+            "Missing can_deploy_and_reload or can_manage_settings permission".to_owned(),
         ))
     }
 }
@@ -40,15 +52,20 @@ pub struct ImportRequest {
 /// Response returned by `POST /api/firewall/generate`.
 #[derive(Debug, Serialize)]
 pub struct GenerateDiskResponse {
+    /// Absolute file paths written to disk.
     pub files_written: Vec<String>,
+    /// Generated bundle metadata and previews.
     pub bundle: GeneratedFilesBundle,
 }
 
 /// Response returned by `POST /api/firewall/generate-and-reload`.
 #[derive(Debug, Serialize)]
 pub struct GenerateAndReloadResponse {
+    /// Absolute file paths written to disk.
     pub files_written: Vec<String>,
+    /// Generated bundle metadata and previews.
     pub bundle: GeneratedFilesBundle,
+    /// Hook execution result returned by `simply_hook_executor`.
     pub hook_result: HookTriggerResult,
 }
 
@@ -56,10 +73,12 @@ pub struct GenerateAndReloadResponse {
 /// `firewall.rules.special`, and `firewall.get.list` filtered against live Docker container state.
 ///
 /// # Errors
-/// Returns [`AppError`] if reading from the database fails.
+/// Returns [`AppError`] if the caller lacks permissions or reading from the database fails.
 pub async fn preview_generated_files(
     State(state): State<AppState>,
+    Extension(caller): Extension<api_key::Model>,
 ) -> Result<Json<GeneratedFilesBundle>, AppError> {
+    ensure_can_preview(&caller)?;
     let settings = fw_settings::Entity::find_by_id(1)
         .one(&state.db)
         .await?
@@ -69,10 +88,11 @@ pub async fn preview_generated_files(
     Ok(Json(bundle))
 }
 
-/// `POST /api/firewall/import` — Import/re-import configuration files from `/example/MainServ/etc_firewall/`.
+/// `POST /api/firewall/import` — Import/re-import configuration files from confined import roots.
 ///
 /// # Errors
-/// Returns [`AppError`] if the caller lacks permissions or import fails.
+/// Returns [`AppError`] if the caller lacks permissions, `source_dir` escapes allowed roots, or
+/// import fails.
 pub async fn import_example_files(
     State(state): State<AppState>,
     Extension(caller): Extension<api_key::Model>,
@@ -94,15 +114,9 @@ pub async fn import_example_files(
             str::to_owned,
         );
 
-    let dir = Path::new(&dir_str);
-    if !dir.exists() {
-        return Err(AppError::InvalidInput(format!(
-            "Import directory '{}' does not exist",
-            dir.display()
-        )));
-    }
+    let confined_dir = confine_import_dir(&dir_str)?;
 
-    let summary = import_from_directory(&state.db, dir, true).await?;
+    let summary = import_from_directory(&state.db, &confined_dir, true).await?;
 
     record_audit(
         &state.db,

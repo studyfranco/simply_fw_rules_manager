@@ -354,19 +354,12 @@ services:
       - whitelist_encryption_key
       - whitelist_vault_api_key
       - whitelist_vault_signing_secret
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        export WHITELIST_ENCRYPTION_KEY="$(tr -d '\r\n' < /run/secrets/whitelist_encryption_key)"
-        if [ -s /run/secrets/whitelist_vault_api_key ]; then
-          export VAULT_API_KEY="$(tr -d '\r\n' < /run/secrets/whitelist_vault_api_key)"
-        fi
-        if [ -s /run/secrets/whitelist_vault_signing_secret ]; then
-          export VAULT_SIGNING_SECRET="$(tr -d '\r\n' < /run/secrets/whitelist_vault_signing_secret)"
-        fi
-        exec /usr/local/bin/simply_white_list
+      - whitelist_probe_signing_secret
     environment:
+      - WHITELIST_ENCRYPTION_KEY_FILE=/run/secrets/whitelist_encryption_key
+      - VAULT_API_KEY_FILE=/run/secrets/whitelist_vault_api_key
+      - VAULT_SIGNING_SECRET_FILE=/run/secrets/whitelist_vault_signing_secret
+      - PROBE_SIGNING_SECRET_FILE=/run/secrets/whitelist_probe_signing_secret
       - TZ=Europe/Paris
       - HOST=0.0.0.0
       - PORT=3004
@@ -451,6 +444,8 @@ secrets:
     file: {{ firewall_secrets_dir }}/whitelist_vault_api_key.txt
   whitelist_vault_signing_secret:
     file: {{ firewall_secrets_dir }}/whitelist_vault_signing_secret.txt
+  whitelist_probe_signing_secret:
+    file: {{ firewall_secrets_dir }}/whitelist_probe_signing_secret.txt
 
 networks:
   {{ docker_net_ext_name }}:

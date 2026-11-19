@@ -29,10 +29,10 @@ if [ -z "${VAULT_FALLBACK_URL:-}" ]; then
 fi
 
 if [ -z "${VAULT_API_KEY:-}" ]; then
-    VAULT_API_KEY='{{ effective_vault_api_key | default("") }}'
+    VAULT_API_KEY={{ host_vault_api_key | default("") | quote }}
 fi
 if [ -z "${VAULT_SIGNING_SECRET:-}" ]; then
-    VAULT_SIGNING_SECRET='{{ effective_vault_signing_secret | default("") }}'
+    VAULT_SIGNING_SECRET={{ host_vault_signing_secret | default("") | quote }}
 fi
 if [ -z "${VAULT_BAN_GROUP:-}" ]; then
     VAULT_BAN_GROUP='{{ vault_group_name | default("Main_Ban") }}'

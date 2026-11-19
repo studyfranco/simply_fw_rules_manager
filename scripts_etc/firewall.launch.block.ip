@@ -20,7 +20,12 @@ if [ -z "${TARGET}" ]; then
 	exit 1
 fi
 
-if ! ip addr show 2>/dev/null | grep -wq "${TARGET%/*}"; then
+if ! is_ipv4 "${TARGET}" && ! is_ipv4_net "${TARGET}" && ! is_ipv6 "${TARGET}" && ! is_ipv6_net "${TARGET}"; then
+	echo "Error: invalid target IP or CIDR '${TARGET}'" >&2
+	exit 1
+fi
+
+if ! ip addr show 2>/dev/null | grep -wqF "${TARGET%/*}"; then
 	if command -v cscli >/dev/null 2>&1; then
 		timeout 300 /bin/cscli decisions add -i "${TARGET}" --duration 100000h --reason "${CAUSE}" >/dev/null 2>&1 &
 	fi
@@ -32,7 +37,7 @@ if command -v fail2ban-client >/dev/null 2>&1; then
 fi
 
 if is_ipv4 "${TARGET}" || is_ipv4_net "${TARGET}"; then
-	if ! ip addr show 2>/dev/null | grep -wq "${TARGET%/*}"; then
+	if ! ip addr show 2>/dev/null | grep -wqF "${TARGET%/*}"; then
 		if is_ipv4 "${TARGET}"; then
 			$ROUTE add -host "${TARGET}" reject 2>/dev/null
 		fi
@@ -44,7 +49,7 @@ if is_ipv4 "${TARGET}" || is_ipv4_net "${TARGET}"; then
 		fi
 	fi
 elif is_ipv6 "${TARGET}"; then
-	if ! ip addr show 2>/dev/null | grep -wq "${TARGET}"; then
+	if ! ip addr show 2>/dev/null | grep -wqF "${TARGET}"; then
 		$ROUTE -6 add -host "${TARGET}" reject 2>/dev/null
 		$IPS add "${IPSLISTBADIP}6" "${TARGET}/48" -exist 2>/dev/null
 		/bin/echo "${TARGET}/48" | tee -a "${FW_DIR}/firewall.block.ip6" >/dev/null &
@@ -52,7 +57,7 @@ elif is_ipv6 "${TARGET}"; then
 	fi
 	$ROUTE -6 -n del "${TARGET}" reject 2>/dev/null
 elif is_ipv6_net "${TARGET}"; then
-	if ! ip addr show 2>/dev/null | grep -wq "${TARGET%/*}"; then
+	if ! ip addr show 2>/dev/null | grep -wqF "${TARGET%/*}"; then
 		$IPS add "${IPSLISTBADIP}6" "${TARGET}" -exist 2>/dev/null
 		/bin/echo "${TARGET}" | tee -a "${FW_DIR}/firewall.block.ip6" >/dev/null &
 		kill_active_connections "inet6" "${TARGET}"

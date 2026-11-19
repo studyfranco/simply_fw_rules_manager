@@ -4,18 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [lints.rust]
-unsafe_code = "warn"
+unsafe_code = "forbid"
 
 [lints.clippy]
 all = { level = "warn", priority = -2 }
 pedantic = { level = "warn", priority = -1 }
-struct_excessive_bools = "allow"
-fn_params_excessive_bools = "allow"
-too_many_lines = "allow"
-similar_names = "allow"
-format_push_string = "allow"
-assigning_clones = "allow"
-match_wildcard_for_single_variants = "allow"
 
 [dependencies]
 axum = "0.8"

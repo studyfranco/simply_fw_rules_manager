@@ -36,11 +36,12 @@ On first startup (or via an explicit import API/UI action), the service parses e
 
 ## 🛠️ Tech Stack & Strict Architectural Constraints
 
-- **Language:** Rust (Edition 2024, `rust-version = "1.85"`)
+- **Language:** Rust (`edition = "2024"`, with the `rust-version` field omitted)
 - **Web Framework:** `axum` (v0.8) + `tokio` + `tower-http`
-- **ORM & Database:** `sea-orm` (v2.0.0-rc) + `sea-orm-migration` — **100% SQL-Agnostic** (`sqlx-sqlite`, `sqlx-postgres`, `sqlx-mysql`).
-  - **Two-Phase Isolated Migration Architecture:** Phase 1 runs `Migrator::up(&db, None)` on a single-connection SQLite pool (`max_connections(1)`) to prevent `SQLITE_BUSY` DDL lock contention; Phase 2 opens the application pool (`SqliteTransactionMode::Immediate` for write serialization, `WAL` journal mode, `foreign_keys=ON`, `synchronous=NORMAL`, `busy_timeout=5000`).
-  - **Zero Raw SQL for DML:** All `SELECT`, `INSERT`, `UPDATE`, and `DELETE` operations MUST use SeaORM's typed query builders (`Entity::find()`, `QuerySelect`, `Condition`, `Expr`). The only allowlisted raw SQL statements in `src/` are connection `PRAGMA`s and index inspection in `src/db.rs` and generated-column DDL in `src/migration/`.
+- **ORM & Database:** `sea-orm` (v2.0) + `sea-orm-migration` — **100% SQL-Agnostic** (`sqlx-sqlite`, `sqlx-postgres`, `sqlx-mysql`).
+  - Apply migrations before serving requests. Configure SQLite connections through `SqliteConnectOptions` and use a single-connection pool with WAL, foreign keys enabled, and a 5-second busy timeout.
+  - Use SeaORM and SeaQuery for all database operations. The sole raw SQL exception is `SELECT 1` in `src/db.rs::check_ready`.
+  - Use `.text()` for variable-length values such as sealed secrets, IP bindings, URLs, paths, ports, rule values, comments, and audit targets.
 - **Frontend:** Strictly Vanilla HTML5, CSS3, and ES6+ JavaScript (`fetch()` API only) served from `./static`.
   - **NO external frontend frameworks** (No React, Vue, Angular, Svelte, Tailwind, Bootstrap) and **NO external CDN dependencies** (zero `<script>` or `<link>` pointing outside the service).
   - Includes a self-contained embedded Bash code editor with line numbers, live syntax highlighting, autocomplete/reference sidebar for `firewall.tools` helper functions, and real-time validation output.
@@ -130,6 +131,12 @@ By analyzing `example/MainServ/etc_firewall/firewall.settings` and `scripts_etc/
 - **Exhaustive Audit Logging:**
   - Every mutating action (settings update, rule CRUD, special rules save/validation failure, blocklist CRUD, file generation, and hook execution trigger) records a `NOT NULL`-attributed row in `audit_logs`.
   - No file versioning or rollback history is stored in the database.
+
+## Unified UX Design Charter
+
+- Put each Add or Create button in the section header above its table or list. Open a creation or edit modal at least 720px wide on desktop, with `#383e45` surfaces, `#565b63` borders, and `#17191b` inputs.
+- Display revealed secrets on one line with ellipsis and use the red `.badge-scope-master` badge for Master keys.
+- Keep the Audit Logs columns in this order — Timestamp | API Key | Client IP | Action | Target | Details. Provide five filters — API Key, Client IP, Action, Since, and Until. Apply Until inclusively with `timestamp <= until`.
 
 ---
 

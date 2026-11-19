@@ -5,8 +5,6 @@
 - name: Initialize safe fallback variables for standalone firewall runs
   ansible.builtin.set_fact:
     effective_vault_host_url: "{{ effective_vault_host_url | default('http://127.0.0.1:3000' if vault_mode == 'local' else remote_vault_url) }}"
-    effective_vault_api_key: "{{ effective_vault_api_key | default(remote_vault_api_key if vault_mode == 'remote' else '') }}"
-    effective_vault_signing_secret: "{{ effective_vault_signing_secret | default(remote_vault_signing_secret if vault_mode == 'remote' else '') }}"
     effective_exporter_feed_url: "{{ effective_exporter_feed_url | default('') }}"
     effective_whitelist_feed_url: "{{ effective_whitelist_feed_url | default('') }}"
 
@@ -99,6 +97,25 @@
     - "{{ firewall_dir }}/firewall.block.ip6"
     - "{{ firewall_dir }}/firewall.allow.{{ firewall_whitelist_ipset_name | default('special_guest') }}.ip"
     - "{{ firewall_dir }}/firewall.allow.{{ firewall_whitelist_ipset_name | default('special_guest') }}.ip6"
+
+- name: Discover existing host blocklist and whitelist record files
+  ansible.builtin.find:
+    paths: "{{ firewall_dir }}"
+    patterns:
+      - "firewall.block.*"
+      - "firewall.allow.*"
+    file_type: file
+    recurse: false
+  register: firewall_host_record_files
+
+- name: Enforce root-only permissions on host Vault configuration and record files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: file
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ [firewall_dir ~ '/firewall.vault.conf'] + (firewall_host_record_files.files | map(attribute='path') | list) }}"
 
 - name: Deploy systemd service units
   ansible.builtin.template:

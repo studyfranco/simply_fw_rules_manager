@@ -49,11 +49,24 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, body) = match self {
             Self::DbError(err) => {
-                tracing::error!("database error: {err}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    json!({ "error": "Internal server error" }),
-                )
+                let msg = err.to_string().to_ascii_lowercase();
+                if msg.contains("database is locked")
+                    || msg.contains("database is busy")
+                    || msg.contains("sqlite_busy")
+                    || msg.contains("pool timed out")
+                {
+                    tracing::warn!("transient database contention: {err}");
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        json!({ "error": "Database temporarily busy; retry shortly" }),
+                    )
+                } else {
+                    tracing::error!("database error: {err}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        json!({ "error": "Internal server error" }),
+                    )
+                }
             }
             Self::InvalidInput(msg) => (StatusCode::BAD_REQUEST, json!({ "error": msg })),
             Self::ValidationFailed { message, report } => (

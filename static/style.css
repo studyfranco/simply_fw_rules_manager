@@ -50,6 +50,7 @@ body {
     font-family: var(--font-sans);
     line-height: 1.6;
     min-height: 100vh;
+    overflow-x: clip;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
@@ -105,7 +106,7 @@ body {
     width: 100vw;
     height: 100vh;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
     background-color: var(--bg-main);
     z-index: 10000;
@@ -119,6 +120,7 @@ body {
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     padding: 2.5rem 2rem;
+    margin: auto;
     width: 100%;
     max-width: 420px;
     box-shadow: var(--shadow-lg);
@@ -361,9 +363,14 @@ body {
 }
 
 .btn-cancel {
-    background-color: transparent;
+    background-color: var(--bg-surface);
     color: var(--text-muted);
     border-color: var(--border);
+}
+
+.btn-cancel:hover:not(:disabled) {
+    background-color: var(--border);
+    color: var(--text-main);
 }
 
 /* ─── Forms ─────────────────────────────────────────────── */
@@ -727,7 +734,7 @@ textarea.input-field {
 
 .toast-container {
     position: fixed;
-    top: 1.5rem;
+    top: 5.25rem;
     right: 1.5rem;
     z-index: 9999;
     display: flex;
@@ -1172,18 +1179,18 @@ textarea.input-field {
     margin-bottom: 0.75rem;
 }
 
-.modal-card-form {
-    max-width: clamp(600px, 56vw, 960px);
+.modal-card-form,
+#create-key-modal .modal-card-form {
+    width: min(94vw, 820px);
+    max-width: clamp(720px, 56vw, 960px);
+    background-color: #383e45;
+    border: 1px solid #565b63;
     max-height: calc(100vh - 3rem);
     overflow-y: auto;
 }
 
 #secret-reveal-modal .modal-card {
     max-width: clamp(580px, 48vw, 860px);
-}
-
-#create-key-modal .modal-card-form {
-    max-width: clamp(620px, 56vw, 960px);
 }
 
 .grid-3 {
@@ -1225,5 +1232,14 @@ textarea.input-field {
 .btn-modal-close:hover {
     color: var(--text-main);
     background-color: rgba(255, 255, 255, 0.06);
+}
+
+input[type="datetime-local"] {
+    color-scheme: dark;
+}
+
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+    filter: invert(0.8);
+    cursor: pointer;
 }
 

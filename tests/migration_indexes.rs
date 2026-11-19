@@ -3,7 +3,7 @@
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use sea_orm_migration::MigratorTrait;
-use simply_fw_rules_manager::db::connect;
+use simply_fw_rules_manager::db::{connect, has_index};
 use simply_fw_rules_manager::migration::Migrator;
 
 #[tokio::test]
@@ -11,6 +11,8 @@ async fn migrations_up_and_down_work_cleanly() {
     let db = connect("sqlite::memory:")
         .await
         .expect("in-memory sqlite connection");
+
+    assert_eq!(Migrator::migrations().len(), 5);
 
     // Apply all migrations up
     Migrator::up(&db, None).await.expect("migrations up");
@@ -57,6 +59,7 @@ async fn migrations_up_and_down_work_cleanly() {
         "idx_fw_blocklists_enabled",
         "idx_api_keys_parent_key_id",
         "idx_api_keys_prefix",
+        "idx_api_keys_master_marker",
     ];
 
     for expected in expected_indexes {
@@ -66,15 +69,38 @@ async fn migrations_up_and_down_work_cleanly() {
         );
     }
 
-    // Rollback last migration (migration 3)
-    Migrator::down(&db, Some(1))
+    // Roll back the text and generated-column migrations.
+    Migrator::down(&db, Some(2))
         .await
-        .expect("migration 3 rollback");
+        .expect("migrations 5 and 4 rollback");
+    assert!(
+        !has_index(&db, "api_keys", "idx_api_keys_master_marker")
+            .await
+            .expect("inspect rolled-back marker index")
+    );
 
-    // Re-apply migration 3
-    Migrator::up(&db, Some(1))
+    Migrator::up(&db, Some(2))
         .await
-        .expect("migration 3 re-apply");
+        .expect("migrations 4 and 5 re-apply");
+
+    // Verify idx_api_keys_master_marker enforces unique Master key at database engine level
+    let master1 = "INSERT INTO api_keys (id, name, key_hash, prefix, is_master, can_manage_keys, can_manage_settings, can_manage_special_rules, can_manage_blocklists, can_deploy_and_reload, created_at, updated_at) VALUES ('00000000-0000-0000-0000-000000000101', 'M1', 'h101', 'p101', 1, 1, 1, 1, 1, 1, '2026-01-01 00:00:00', '2026-01-01 00:00:00')";
+    let master2 = "INSERT INTO api_keys (id, name, key_hash, prefix, is_master, can_manage_keys, can_manage_settings, can_manage_special_rules, can_manage_blocklists, can_deploy_and_reload, created_at, updated_at) VALUES ('00000000-0000-0000-0000-000000000102', 'M2', 'h102', 'p102', 1, 1, 1, 1, 1, 1, '2026-01-01 00:00:00', '2026-01-01 00:00:00')";
+    db.execute_raw(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        master1.to_owned(),
+    ))
+    .await
+    .expect("first master inserts cleanly");
+    assert!(
+        db.execute_raw(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            master2.to_owned()
+        ))
+        .await
+        .is_err(),
+        "idx_api_keys_master_marker must reject inserting a second Master row"
+    );
 }
 
 #[tokio::test]
@@ -103,9 +129,12 @@ async fn explain_query_plans_verify_index_scans_eliminate_seq_scans() {
         VALUES ('00000000-0000-0000-0000-000000000005', 'feed1', 'http://example.com', 1, 0, '2026-01-01 00:00:00', '2026-01-01 00:00:00');
     ";
     for stmt in seed_sql.split(';').map(str::trim).filter(|s| !s.is_empty()) {
-        db.execute_raw(Statement::from_string(DatabaseBackend::Sqlite, stmt.to_owned()))
-            .await
-            .expect("execute seed statement");
+        db.execute_raw(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            stmt.to_owned(),
+        ))
+        .await
+        .expect("execute seed statement");
     }
 
     // List of critical application queries and the index each must leverage
@@ -138,7 +167,10 @@ async fn explain_query_plans_verify_index_scans_eliminate_seq_scans() {
 
     for (query, expected_index) in critical_queries {
         let rows = db
-            .query_all_raw(Statement::from_string(DatabaseBackend::Sqlite, query.to_owned()))
+            .query_all_raw(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                query.to_owned(),
+            ))
             .await
             .unwrap_or_else(|e| panic!("Failed to run query plan for '{query}': {e}"));
 

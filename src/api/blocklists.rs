@@ -1,6 +1,7 @@
 //! Blocklist feeds (`firewall.get.list`) CRUD and live HTTP feed tester (`/api/firewall/blocklists`).
 
 use std::net::IpAddr;
+use std::time::Duration;
 
 use axum::Extension;
 use axum::Json;
@@ -8,6 +9,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
+use reqwest::Client;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -17,11 +19,15 @@ use crate::entities::{api_key, fw_blocklist};
 use crate::error::AppError;
 use crate::extract::{StrictJson, StrictPath};
 use crate::generator::render_get_list;
+use crate::input_validation::{
+    resolve_safe_blocklist_addrs, validate_blocklist_host_ssrf, validate_docker_name,
+    validate_http_url,
+};
 use crate::middleware::ClientIp;
 use crate::state::AppState;
 
 fn ensure_can_manage_blocklists(caller: &api_key::Model) -> Result<(), AppError> {
-    if caller.is_master || caller.can_manage_blocklists {
+    if caller.is_master || caller.can_manage_blocklists.is_granted() {
         Ok(())
     } else {
         Err(AppError::Forbidden(
@@ -33,16 +39,27 @@ fn ensure_can_manage_blocklists(caller: &api_key::Model) -> Result<(), AppError>
 /// Serialized blocklist entry.
 #[derive(Debug, Serialize)]
 pub struct BlocklistResponse {
+    /// Blocklist row UUID.
     pub id: Uuid,
+    /// Blocklist identifier (`[a-zA-Z0-9._-]+`).
     pub name: String,
+    /// HTTP/HTTPS URL serving plaintext IP/CIDR entries.
     pub url: String,
+    /// Whether this blocklist is emitted in `firewall.get.list`.
     pub enabled: bool,
+    /// Optional operator description.
     pub description: Option<String>,
+    /// Outcome of the most recent live feed test.
     pub last_test_ok: Option<bool>,
+    /// Number of valid entries parsed in the last test.
     pub last_test_entries: Option<i32>,
+    /// UTC timestamp of the last test.
     pub last_test_at: Option<DateTime<Utc>>,
+    /// Relative ordering when generating `firewall.get.list`.
     pub sort_order: i32,
+    /// UTC creation timestamp.
     pub created_at: DateTime<Utc>,
+    /// UTC modification timestamp.
     pub updated_at: DateTime<Utc>,
 }
 
@@ -67,7 +84,9 @@ impl From<fw_blocklist::Model> for BlocklistResponse {
 /// Full list response including the rendered `firewall.get.list` preview.
 #[derive(Debug, Serialize)]
 pub struct BlocklistsOverviewResponse {
+    /// All configured blocklists.
     pub items: Vec<BlocklistResponse>,
+    /// Rendered `firewall.get.list` Bash script preview for enabled entries.
     pub script_preview: String,
 }
 
@@ -75,11 +94,16 @@ pub struct BlocklistsOverviewResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpsertBlocklistRequest {
+    /// Blocklist identifier (`[a-zA-Z0-9._-]+`).
     pub name: String,
+    /// HTTP/HTTPS blocklist feed URL.
     pub url: String,
+    /// Whether the blocklist is active.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Optional human description.
     pub description: Option<String>,
+    /// Sort index for script generation.
     #[serde(default)]
     pub sort_order: i32,
 }
@@ -88,34 +112,27 @@ const fn default_true() -> bool {
     true
 }
 
-fn validate_blocklist_inputs(name: &str, url: &str) -> Result<(String, String), AppError> {
-    let trimmed_name = name.trim().to_owned();
-    if trimmed_name.is_empty()
-        || !trimmed_name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
-    {
-        return Err(AppError::InvalidInput(
-            "Blocklist name must be non-empty and contain only alphanumeric, '_', '-', or '.' characters"
-                .to_owned(),
-        ));
-    }
-    let trimmed_url = url.trim().to_owned();
-    if !trimmed_url.starts_with("http://") && !trimmed_url.starts_with("https://") {
-        return Err(AppError::InvalidInput(
-            "Blocklist URL must start with http:// or https://".to_owned(),
-        ));
-    }
+fn validate_blocklist_inputs(
+    name: &str,
+    url: &str,
+    allow_private_urls: bool,
+) -> Result<(String, String), AppError> {
+    let trimmed_name = validate_docker_name("blocklist name", name)?;
+    let trimmed_url = validate_http_url("blocklist URL", url)?;
+    validate_blocklist_host_ssrf(&trimmed_url, allow_private_urls)?;
     Ok((trimmed_name, trimmed_url))
 }
 
 /// `GET /api/firewall/blocklists` — List all blocklists and preview `firewall.get.list`.
 ///
 /// # Errors
-/// Returns [`AppError`] if querying the database fails.
+/// Returns [`AppError`] if the caller lacks permissions or querying the database fails.
 pub async fn list_blocklists(
     State(state): State<AppState>,
+    Extension(caller): Extension<api_key::Model>,
 ) -> Result<Json<BlocklistsOverviewResponse>, AppError> {
+    ensure_can_manage_blocklists(&caller)?;
+
     let models = fw_blocklist::Entity::find()
         .order_by_asc(fw_blocklist::Column::SortOrder)
         .all(&state.db)
@@ -123,7 +140,7 @@ pub async fn list_blocklists(
 
     let enabled_only: Vec<fw_blocklist::Model> =
         models.iter().filter(|m| m.enabled).cloned().collect();
-    let script_preview = render_get_list(&enabled_only);
+    let script_preview = render_get_list(&enabled_only)?;
     let items = models.into_iter().map(BlocklistResponse::from).collect();
 
     Ok(Json(BlocklistsOverviewResponse {
@@ -143,7 +160,8 @@ pub async fn create_blocklist(
     StrictJson(payload): StrictJson<UpsertBlocklistRequest>,
 ) -> Result<(StatusCode, Json<BlocklistResponse>), AppError> {
     ensure_can_manage_blocklists(&caller)?;
-    let (name, url) = validate_blocklist_inputs(&payload.name, &payload.url)?;
+    let (name, url) =
+        validate_blocklist_inputs(&payload.name, &payload.url, state.allow_private_urls)?;
 
     if fw_blocklist::Entity::find()
         .filter(fw_blocklist::Column::Name.eq(&name))
@@ -201,7 +219,8 @@ pub async fn update_blocklist(
     StrictJson(payload): StrictJson<UpsertBlocklistRequest>,
 ) -> Result<Json<BlocklistResponse>, AppError> {
     ensure_can_manage_blocklists(&caller)?;
-    let (name, url) = validate_blocklist_inputs(&payload.name, &payload.url)?;
+    let (name, url) =
+        validate_blocklist_inputs(&payload.name, &payload.url, state.allow_private_urls)?;
 
     let existing = fw_blocklist::Entity::find_by_id(id)
         .one(&state.db)
@@ -289,15 +308,25 @@ pub async fn delete_blocklist(
 /// Result of a live HTTP test against a blocklist feed URL.
 #[derive(Debug, Serialize)]
 pub struct BlocklistTestResponse {
+    /// Blocklist UUID.
     pub id: Uuid,
+    /// Blocklist name.
     pub name: String,
+    /// Blocklist URL tested.
     pub url: String,
+    /// Whether the feed returned 2xx and at least one valid entry with zero parse errors.
     pub valid: bool,
+    /// HTTP status code received from the upstream feed.
     pub status_code: u16,
+    /// Valid IPv4 addresses/CIDRs counted.
     pub valid_ipv4_count: usize,
+    /// Valid IPv6 addresses/CIDRs counted.
     pub valid_ipv6_count: usize,
+    /// Unparseable non-comment lines encountered.
     pub invalid_line_count: usize,
+    /// Sample normalized entries (up to 5).
     pub sample_entries: Vec<String>,
+    /// Human-readable summary message.
     pub message: String,
 }
 
@@ -331,9 +360,20 @@ pub async fn test_blocklist(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let response = state
-        .http
-        .get(&existing.url)
+    let clean_url = validate_http_url("blocklist URL", &existing.url)?;
+    let client = match resolve_safe_blocklist_addrs(&clean_url, state.allow_private_urls).await? {
+        Some((host, addrs)) => Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve_to_addrs(&host, &addrs)
+            .build()
+            .map_err(|_| AppError::Internal)?,
+        None => state.http.clone(),
+    };
+
+    let response = client
+        .get(&clean_url)
         .send()
         .await
         .map_err(|e| AppError::Upstream(format!("Failed fetching {}: {e}", existing.url)))?;

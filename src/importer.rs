@@ -58,62 +58,27 @@ pub async fn seed_if_empty(
     Ok(Some(summary))
 }
 
-/// Parses `firewall.settings`, `firewall.rules.special`, and `firewall.get.list` from `dir`
-/// and populates the database tables.
-///
-/// # Errors
-/// Returns [`sea_orm::DbErr`] if database persistence fails.
-pub async fn import_from_directory(
+async fn upsert_imported_settings(
     db: &DatabaseConnection,
-    dir: &Path,
-    replace_existing: bool,
-) -> Result<ImportSummary, sea_orm::DbErr> {
-    let settings_path = dir.join("firewall.settings");
-    let special_path = dir.join("firewall.rules.special");
-    let get_list_path = dir.join("firewall.get.list");
-
-    let fallback_to_defaults = dir == Path::new("example/MainServ/etc_firewall") || !dir.exists();
-
-    let settings_raw = std::fs::read_to_string(&settings_path).unwrap_or_else(|_| {
-        if fallback_to_defaults {
-            DEFAULT_SETTINGS.to_owned()
-        } else {
-            String::new()
-        }
-    });
-    let special_raw = std::fs::read_to_string(&special_path).unwrap_or_else(|_| {
-        if fallback_to_defaults {
-            DEFAULT_SPECIAL_RULES.to_owned()
-        } else {
-            String::new()
-        }
-    });
-    let get_list_raw = std::fs::read_to_string(&get_list_path).unwrap_or_else(|_| {
-        if fallback_to_defaults {
-            DEFAULT_GET_LIST.to_owned()
-        } else {
-            String::new()
-        }
-    });
-
-    let parsed = parse_firewall_settings(&settings_raw);
-
-    if replace_existing {
-        fw_docker_inter_rule::Entity::delete_many().exec(db).await?;
-        fw_zone_rule::Entity::delete_many().exec(db).await?;
-        fw_blocklist::Entity::delete_many().exec(db).await?;
-    }
-
-    let now = Utc::now();
+    parsed: &ParsedFirewallSettings,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), sea_orm::DbErr> {
     let output_dir = std::env::var("FW_OUTPUT_DIR").unwrap_or_else(|_| "/etc/firewall".to_owned());
     let tools_path =
         std::env::var("FW_TOOLS_PATH").unwrap_or_else(|_| "scripts_etc/firewall.tools".to_owned());
     let docker_endpoint = std::env::var("DOCKER_ENDPOINT")
         .unwrap_or_else(|_| "unix:///var/run/docker.sock".to_owned());
 
+    let cipher =
+        crate::crypto::SecretCipher::from_env().unwrap_or(crate::crypto::SecretCipher::Plaintext);
+    let sealed_api_key = crate::config::get_secret_or_env("HOOK_EXECUTOR_API_KEY")
+        .and_then(|raw| cipher.seal(&raw).ok());
+    let sealed_signing_secret = crate::config::get_secret_or_env("HOOK_EXECUTOR_SIGNING_SECRET")
+        .and_then(|raw| cipher.seal(&raw).ok());
+
     let settings_model = fw_settings::ActiveModel {
         id: Set(1),
-        main_inter: Set(parsed.main_inter),
+        main_inter: Set(parsed.main_inter.clone()),
         inter_out_json: Set(serde_json::to_string(&parsed.inter_out).unwrap_or_default()),
         interface_to_go_outside_json: Set(
             serde_json::to_string(&parsed.interface_to_go_outside).unwrap_or_default()
@@ -146,20 +111,15 @@ pub async fn import_from_directory(
         ip_autor_dnat_port_udp_json: Set(
             serde_json::to_string(&parsed.ip_autor_dnat_port_udp).unwrap_or_default()
         ),
-        country_open_port: Set(parsed.country_open_port),
-        blocked_country: Set(parsed.blocked_country),
-        blocked_country_2: Set(parsed.blocked_country_2),
+        country_open_port: Set(parsed.country_open_port.clone()),
+        blocked_country: Set(parsed.blocked_country.clone()),
+        blocked_country_2: Set(parsed.blocked_country_2.clone()),
         docker_endpoint: Set(docker_endpoint),
         output_dir: Set(output_dir),
         tools_script_path: Set(tools_path),
         hook_executor_url: Set(crate::config::get_secret_or_env("HOOK_EXECUTOR_URL")),
-        hook_executor_api_key: Set(crate::config::get_secret_or_env("HOOK_EXECUTOR_API_KEY")),
-        hook_executor_signing_secret: Set({
-            let cipher = crate::crypto::SecretCipher::from_env()
-                .unwrap_or(crate::crypto::SecretCipher::Plaintext);
-            crate::config::get_secret_or_env("HOOK_EXECUTOR_SIGNING_SECRET")
-                .and_then(|raw| cipher.seal(&raw).ok())
-        }),
+        hook_executor_api_key: Set(sealed_api_key),
+        hook_executor_signing_secret: Set(sealed_signing_secret),
         hook_reload_name: Set("firewall-reload".to_owned()),
         hook_update_containers_name: Set("docker-update-containers".to_owned()),
         updated_at: Set(now),
@@ -170,19 +130,26 @@ pub async fn import_from_directory(
     } else {
         settings_model.insert(db).await?;
     }
+    Ok(())
+}
 
+async fn insert_imported_docker_rules(
+    db: &DatabaseConnection,
+    entries: &[String],
+    now: chrono::DateTime<Utc>,
+) -> Result<usize, sea_orm::DbErr> {
     let mut docker_inter_rows = Vec::new();
-    for (idx, entry) in parsed.docker_access_between_them.iter().enumerate() {
+    for (idx, entry) in entries.iter().enumerate() {
         let parts: Vec<&str> = entry.split(';').collect();
         if parts.len() >= 5 {
-            let ports = parts[4..].join(";");
+            let rule_ports = parts[4..].join(";");
             docker_inter_rows.push(fw_docker_inter_rule::ActiveModel {
                 id: Set(Uuid::new_v4()),
                 source_container: Set(parts[0].trim().to_owned()),
                 destination_container: Set(parts[1].trim().to_owned()),
                 network_name: Set(parts[2].trim().to_owned()),
                 proto: Set(parts[3].trim().to_owned()),
-                ports: Set(ports),
+                ports: Set(rule_ports),
                 enabled: Set(true),
                 comment: Set(None),
                 sort_order: Set(i32::try_from(idx).unwrap_or(0)),
@@ -191,15 +158,22 @@ pub async fn import_from_directory(
             });
         }
     }
-    let docker_inter_count = docker_inter_rows.len();
+    let count = docker_inter_rows.len();
     if !docker_inter_rows.is_empty() {
         fw_docker_inter_rule::Entity::insert_many(docker_inter_rows)
             .exec(db)
             .await?;
     }
+    Ok(count)
+}
 
+async fn insert_imported_zone_rules(
+    db: &DatabaseConnection,
+    entries: Vec<(String, String, String)>,
+    now: chrono::DateTime<Utc>,
+) -> Result<usize, sea_orm::DbErr> {
     let mut zone_rows = Vec::new();
-    for (idx, (zone, rule_kind, val)) in parsed.zone_rules.into_iter().enumerate() {
+    for (idx, (zone, rule_kind, val)) in entries.into_iter().enumerate() {
         let container_name = if rule_kind == "DockerTCP" || rule_kind == "DockerUDP" {
             val.split(',').nth(2).map(|s| s.trim().to_owned())
         } else {
@@ -218,14 +192,21 @@ pub async fn import_from_directory(
             updated_at: Set(now),
         });
     }
-    let zone_count = zone_rows.len();
+    let count = zone_rows.len();
     if !zone_rows.is_empty() {
         fw_zone_rule::Entity::insert_many(zone_rows)
             .exec(db)
             .await?;
     }
+    Ok(count)
+}
 
-    let refactored_special = refactor_special_rules_script(&special_raw);
+async fn upsert_imported_special_rules(
+    db: &DatabaseConnection,
+    special_raw: &str,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), sea_orm::DbErr> {
+    let refactored_special = refactor_special_rules_script(special_raw);
     let special_model = fw_special_rules::ActiveModel {
         id: Set(1),
         script_content: Set(refactored_special),
@@ -242,8 +223,15 @@ pub async fn import_from_directory(
     } else {
         special_model.insert(db).await?;
     }
+    Ok(())
+}
 
-    let blocklists = parse_get_list_feeds(&get_list_raw);
+async fn insert_imported_blocklists(
+    db: &DatabaseConnection,
+    get_list_raw: &str,
+    now: chrono::DateTime<Utc>,
+) -> Result<usize, sea_orm::DbErr> {
+    let blocklists = parse_get_list_feeds(get_list_raw);
     let mut blocklist_rows = Vec::new();
     for (idx, (name, url, enabled)) in blocklists.into_iter().enumerate() {
         blocklist_rows.push(fw_blocklist::ActiveModel {
@@ -260,12 +248,55 @@ pub async fn import_from_directory(
             updated_at: Set(now),
         });
     }
-    let bl_count = blocklist_rows.len();
+    let count = blocklist_rows.len();
     if !blocklist_rows.is_empty() {
         fw_blocklist::Entity::insert_many(blocklist_rows)
             .exec(db)
             .await?;
     }
+    Ok(count)
+}
+
+/// Parses `firewall.settings`, `firewall.rules.special`, and `firewall.get.list` from `dir`
+/// and populates the database tables.
+///
+/// # Errors
+/// Returns [`sea_orm::DbErr`] if database persistence fails.
+pub async fn import_from_directory(
+    db: &DatabaseConnection,
+    dir: &Path,
+    replace_existing: bool,
+) -> Result<ImportSummary, sea_orm::DbErr> {
+    let fallback_to_defaults = dir == Path::new("example/MainServ/etc_firewall") || !dir.exists();
+    let read_or_default = |name: &str, default_val: &str| {
+        std::fs::read_to_string(dir.join(name)).unwrap_or_else(|_| {
+            if fallback_to_defaults {
+                default_val.to_owned()
+            } else {
+                String::new()
+            }
+        })
+    };
+
+    let settings_raw = read_or_default("firewall.settings", DEFAULT_SETTINGS);
+    let special_raw = read_or_default("firewall.rules.special", DEFAULT_SPECIAL_RULES);
+    let get_list_raw = read_or_default("firewall.get.list", DEFAULT_GET_LIST);
+
+    let parsed = parse_firewall_settings(&settings_raw);
+
+    if replace_existing {
+        fw_docker_inter_rule::Entity::delete_many().exec(db).await?;
+        fw_zone_rule::Entity::delete_many().exec(db).await?;
+        fw_blocklist::Entity::delete_many().exec(db).await?;
+    }
+
+    let now = Utc::now();
+    upsert_imported_settings(db, &parsed, now).await?;
+    let docker_inter_count =
+        insert_imported_docker_rules(db, &parsed.docker_access_between_them, now).await?;
+    let zone_count = insert_imported_zone_rules(db, parsed.zone_rules, now).await?;
+    upsert_imported_special_rules(db, &special_raw, now).await?;
+    let bl_count = insert_imported_blocklists(db, &get_list_raw, now).await?;
 
     Ok(ImportSummary {
         source_dir: dir.display().to_string(),
@@ -279,21 +310,37 @@ pub async fn import_from_directory(
 /// Parsed representation of `firewall.settings`.
 #[derive(Debug, Default)]
 pub struct ParsedFirewallSettings {
+    /// Primary outbound network interface (`mainInter`).
     pub main_inter: String,
+    /// Outbound NAT interfaces (`INTEROut`).
     pub inter_out: Vec<String>,
+    /// Interfaces routed outside (`interfaceToGoOutSide`).
     pub interface_to_go_outside: Vec<String>,
+    /// Internal interfaces with local access (`internInterfaceHaveAccessAsLocal`).
     pub intern_interface_have_access_as_local: Vec<String>,
+    /// Local host interfaces (`interfaceLocal`).
     pub interface_local: Vec<String>,
+    /// DHCP flag map per interface (`interfaceWithDHCP`).
     pub interface_with_dhcp: BTreeMap<String, bool>,
+    /// Unfiltered interfaces (`interfaceWithNoRules`).
     pub interface_with_no_rules: Vec<String>,
+    /// Docker networks allowed Internet egress (`dockerNetworkWithInternetAccess`).
     pub docker_network_with_internet_access: Vec<String>,
+    /// Docker networks allowed host access (`dockerNetworkWithAccess`).
     pub docker_network_with_access: Vec<String>,
+    /// Inter-container Docker rules (`dockerAccessBetweenThem`).
     pub docker_access_between_them: Vec<String>,
+    /// Trusted administrator IP/CIDRs (`IPAutor`).
     pub ip_autor: Vec<String>,
+    /// Trusted DNAT TCP rules (`IPAutorDnatPortTCP`).
     pub ip_autor_dnat_port_tcp: Vec<String>,
+    /// Trusted DNAT UDP rules (`IPAutorDnatPortUDP`).
     pub ip_autor_dnat_port_udp: Vec<String>,
+    /// GeoIP-allowed country codes (`countryOpenPort`).
     pub country_open_port: String,
+    /// Primary GeoIP-blocked country codes (`blockedCountry`).
     pub blocked_country: String,
+    /// Secondary GeoIP-blocked country codes (`blockedCountry2`).
     pub blocked_country_2: String,
     /// `(zone, rule_kind, value)` tuples.
     pub zone_rules: Vec<(String, String, String)>,
@@ -306,6 +353,105 @@ fn extract_quoted_items(raw: &str) -> Vec<String> {
     re.captures_iter(raw)
         .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_owned()))
         .collect()
+}
+
+const ZONE_MAPPINGS: &[(&str, &str, &str)] = &[
+    ("IPAutorDockerTCP=(", "ip_autor", "DockerTCP"),
+    ("IPAutorDockerUDP=(", "ip_autor", "DockerUDP"),
+    ("internalOpenPortsTCP=(", "internal", "OpenPortsTCP"),
+    ("internalOpenPortsUDP=(", "internal", "OpenPortsUDP"),
+    ("internalRedirectPortTCP=(", "internal", "RedirectPortTCP"),
+    ("internalRedirectPortUDP=(", "internal", "RedirectPortUDP"),
+    ("internalDnatPortTCP=(", "internal", "DnatPortTCP"),
+    ("internalDnatPortUDP=(", "internal", "DnatPortUDP"),
+    ("internalDockerTCP=(", "internal", "DockerTCP"),
+    ("internalDockerUDP=(", "internal", "DockerUDP"),
+    ("localOpenPortsTCP=(", "local", "OpenPortsTCP"),
+    ("localOpenPortsUDP=(", "local", "OpenPortsUDP"),
+    ("localRedirectPortTCP=(", "local", "RedirectPortTCP"),
+    ("localRedirectPortUDP=(", "local", "RedirectPortUDP"),
+    ("localDnatPortTCP=(", "local", "DnatPortTCP"),
+    ("localDnatPortUDP=(", "local", "DnatPortUDP"),
+    ("localDockerTCP=(", "local", "DockerTCP"),
+    ("localDockerUDP=(", "local", "DockerUDP"),
+    ("WWopenPortTCP=(", "ww", "OpenPortsTCP"),
+    ("WWopenPortUDP=(", "ww", "OpenPortsUDP"),
+    ("WWredirectPortTCP=(", "ww", "RedirectPortTCP"),
+    ("WWredirectPortUDP=(", "ww", "RedirectPortUDP"),
+    ("WWdnatPortTCP=(", "ww", "DnatPortTCP"),
+    ("WWdnatPortUDP=(", "ww", "DnatPortUDP"),
+    ("WWDockerTCP=(", "ww", "DockerTCP"),
+    ("WWDockerUDP=(", "ww", "DockerUDP"),
+    ("openPortTCP=(", "open", "OpenPortsTCP"),
+    ("openPortUDP=(", "open", "OpenPortsUDP"),
+    ("redirectPortTCP=(", "open", "RedirectPortTCP"),
+    ("redirectPortUDP=(", "open", "RedirectPortUDP"),
+    ("dnatPortTCP=(", "open", "DnatPortTCP"),
+    ("dnatPortUDP=(", "open", "DnatPortUDP"),
+    ("openDockerTCP=(", "open", "DockerTCP"),
+    ("openDockerUDP=(", "open", "DockerUDP"),
+];
+
+fn apply_parsed_settings_line(
+    out: &mut ParsedFirewallSettings,
+    code_part: &str,
+    assoc_re: Option<&Regex>,
+) {
+    if let Some(rest) = code_part.strip_prefix("mainInter=") {
+        rest.trim_matches('"').clone_into(&mut out.main_inter);
+    } else if code_part.contains("INTEROut=(") {
+        out.inter_out = extract_quoted_items(code_part);
+    } else if code_part.contains("interfaceToGoOutSide=(") {
+        out.interface_to_go_outside = extract_quoted_items(code_part);
+    } else if code_part.contains("internInterfaceHaveAccessAsLocal=(") {
+        out.intern_interface_have_access_as_local = extract_quoted_items(code_part);
+    } else if code_part.contains("interfaceLocal=(") {
+        out.interface_local = extract_quoted_items(code_part);
+    } else if code_part.contains("interfaceWithDHCP=(") {
+        if let Some(re) = assoc_re {
+            for cap in re.captures_iter(code_part) {
+                if let (Some(k), Some(v)) = (cap.get(1), cap.get(2)) {
+                    out.interface_with_dhcp
+                        .insert(k.as_str().to_owned(), v.as_str() == "1");
+                }
+            }
+        }
+    } else if code_part.contains("interfaceWithNoRules=(") {
+        out.interface_with_no_rules = extract_quoted_items(code_part);
+    } else if code_part.contains("dockerNetworkWithInternetAccess=(") {
+        out.docker_network_with_internet_access = extract_quoted_items(code_part);
+    } else if code_part.contains("dockerNetworkWithAccess=(") {
+        out.docker_network_with_access = extract_quoted_items(code_part);
+    } else if code_part.contains("dockerAccessBetweenThem=(") {
+        out.docker_access_between_them = extract_quoted_items(code_part);
+    } else if code_part.contains("IPAutor=(") {
+        out.ip_autor = extract_quoted_items(code_part);
+    } else if code_part.contains("IPAutorDnatPortTCP=(") {
+        out.ip_autor_dnat_port_tcp = extract_quoted_items(code_part);
+    } else if code_part.contains("IPAutorDnatPortUDP=(") {
+        out.ip_autor_dnat_port_udp = extract_quoted_items(code_part);
+    } else if code_part.contains("countryOpenPort=") {
+        if let Some(first) = extract_quoted_items(code_part).into_iter().next() {
+            out.country_open_port = first;
+        }
+    } else if code_part.contains("blockedCountry=") {
+        if let Some(first) = extract_quoted_items(code_part).into_iter().next() {
+            out.blocked_country = first;
+        }
+    } else if code_part.contains("blockedCountry2=") {
+        if let Some(first) = extract_quoted_items(code_part).into_iter().next() {
+            out.blocked_country_2 = first;
+        }
+    } else {
+        for &(prefix, zone, kind) in ZONE_MAPPINGS {
+            if code_part.contains(prefix) {
+                for val in extract_quoted_items(code_part) {
+                    out.zone_rules.push((zone.to_owned(), kind.to_owned(), val));
+                }
+                break;
+            }
+        }
+    }
 }
 
 /// Parses a `firewall.settings` file into structured domain settings.
@@ -326,98 +472,7 @@ pub fn parse_firewall_settings(content: &str) -> ParsedFirewallSettings {
         }
         // Strip inline comment after closing parenthesis or quote
         let code_part = line.split(" #").next().unwrap_or(line).trim();
-
-        if let Some(rest) = code_part.strip_prefix("mainInter=") {
-            out.main_inter = rest.trim_matches('"').to_owned();
-        } else if code_part.contains("INTEROut=(") {
-            out.inter_out = extract_quoted_items(code_part);
-        } else if code_part.contains("interfaceToGoOutSide=(") {
-            out.interface_to_go_outside = extract_quoted_items(code_part);
-        } else if code_part.contains("internInterfaceHaveAccessAsLocal=(") {
-            out.intern_interface_have_access_as_local = extract_quoted_items(code_part);
-        } else if code_part.contains("interfaceLocal=(") {
-            out.interface_local = extract_quoted_items(code_part);
-        } else if code_part.contains("interfaceWithDHCP=(") {
-            if let Some(re) = &assoc_re {
-                for cap in re.captures_iter(code_part) {
-                    if let (Some(k), Some(v)) = (cap.get(1), cap.get(2)) {
-                        out.interface_with_dhcp
-                            .insert(k.as_str().to_owned(), v.as_str() == "1");
-                    }
-                }
-            }
-        } else if code_part.contains("interfaceWithNoRules=(") {
-            out.interface_with_no_rules = extract_quoted_items(code_part);
-        } else if code_part.contains("dockerNetworkWithInternetAccess=(") {
-            out.docker_network_with_internet_access = extract_quoted_items(code_part);
-        } else if code_part.contains("dockerNetworkWithAccess=(") {
-            out.docker_network_with_access = extract_quoted_items(code_part);
-        } else if code_part.contains("dockerAccessBetweenThem=(") {
-            out.docker_access_between_them = extract_quoted_items(code_part);
-        } else if code_part.contains("IPAutor=(") {
-            out.ip_autor = extract_quoted_items(code_part);
-        } else if code_part.contains("IPAutorDnatPortTCP=(") {
-            out.ip_autor_dnat_port_tcp = extract_quoted_items(code_part);
-        } else if code_part.contains("IPAutorDnatPortUDP=(") {
-            out.ip_autor_dnat_port_udp = extract_quoted_items(code_part);
-        } else if code_part.contains("countryOpenPort=") {
-            if let Some(first) = extract_quoted_items(code_part).into_iter().next() {
-                out.country_open_port = first;
-            }
-        } else if code_part.contains("blockedCountry=") {
-            if let Some(first) = extract_quoted_items(code_part).into_iter().next() {
-                out.blocked_country = first;
-            }
-        } else if code_part.contains("blockedCountry2=") {
-            if let Some(first) = extract_quoted_items(code_part).into_iter().next() {
-                out.blocked_country_2 = first;
-            }
-        } else {
-            let zone_mappings = [
-                ("IPAutorDockerTCP=(", "ip_autor", "DockerTCP"),
-                ("IPAutorDockerUDP=(", "ip_autor", "DockerUDP"),
-                ("internalOpenPortsTCP=(", "internal", "OpenPortsTCP"),
-                ("internalOpenPortsUDP=(", "internal", "OpenPortsUDP"),
-                ("internalRedirectPortTCP=(", "internal", "RedirectPortTCP"),
-                ("internalRedirectPortUDP=(", "internal", "RedirectPortUDP"),
-                ("internalDnatPortTCP=(", "internal", "DnatPortTCP"),
-                ("internalDnatPortUDP=(", "internal", "DnatPortUDP"),
-                ("internalDockerTCP=(", "internal", "DockerTCP"),
-                ("internalDockerUDP=(", "internal", "DockerUDP"),
-                ("localOpenPortsTCP=(", "local", "OpenPortsTCP"),
-                ("localOpenPortsUDP=(", "local", "OpenPortsUDP"),
-                ("localRedirectPortTCP=(", "local", "RedirectPortTCP"),
-                ("localRedirectPortUDP=(", "local", "RedirectPortUDP"),
-                ("localDnatPortTCP=(", "local", "DnatPortTCP"),
-                ("localDnatPortUDP=(", "local", "DnatPortUDP"),
-                ("localDockerTCP=(", "local", "DockerTCP"),
-                ("localDockerUDP=(", "local", "DockerUDP"),
-                ("WWopenPortTCP=(", "ww", "OpenPortsTCP"),
-                ("WWopenPortUDP=(", "ww", "OpenPortsUDP"),
-                ("WWredirectPortTCP=(", "ww", "RedirectPortTCP"),
-                ("WWredirectPortUDP=(", "ww", "RedirectPortUDP"),
-                ("WWdnatPortTCP=(", "ww", "DnatPortTCP"),
-                ("WWdnatPortUDP=(", "ww", "DnatPortUDP"),
-                ("WWDockerTCP=(", "ww", "DockerTCP"),
-                ("WWDockerUDP=(", "ww", "DockerUDP"),
-                ("openPortTCP=(", "open", "OpenPortsTCP"),
-                ("openPortUDP=(", "open", "OpenPortsUDP"),
-                ("redirectPortTCP=(", "open", "RedirectPortTCP"),
-                ("redirectPortUDP=(", "open", "RedirectPortUDP"),
-                ("dnatPortTCP=(", "open", "DnatPortTCP"),
-                ("dnatPortUDP=(", "open", "DnatPortUDP"),
-                ("openDockerTCP=(", "open", "DockerTCP"),
-                ("openDockerUDP=(", "open", "DockerUDP"),
-            ];
-            for (prefix, zone, kind) in zone_mappings {
-                if code_part.contains(prefix) {
-                    for val in extract_quoted_items(code_part) {
-                        out.zone_rules.push((zone.to_owned(), kind.to_owned(), val));
-                    }
-                    break;
-                }
-            }
-        }
+        apply_parsed_settings_line(&mut out, code_part, assoc_re.as_ref());
     }
 
     out
@@ -496,8 +551,22 @@ generate_list "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt"
 "#;
         let feeds = parse_get_list_feeds(sample);
         assert_eq!(feeds.len(), 2);
-        assert_eq!(feeds[0], ("emerging_threats".to_owned(), "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt".to_owned(), true));
-        assert_eq!(feeds[1], ("feodo_tracker".to_owned(), "https://feodotracker.abuse.ch/downloads/ipblocklist.txt".to_owned(), false));
+        assert_eq!(
+            feeds[0],
+            (
+                "emerging_threats".to_owned(),
+                "https://rules.emergingthreats.net/fwrules/emerging-Block-IPs.txt".to_owned(),
+                true
+            )
+        );
+        assert_eq!(
+            feeds[1],
+            (
+                "feodo_tracker".to_owned(),
+                "https://feodotracker.abuse.ch/downloads/ipblocklist.txt".to_owned(),
+                false
+            )
+        );
     }
 
     #[test]
@@ -540,10 +609,30 @@ WWopenPortUDP=("53" "123")
 "#;
         let parsed = parse_firewall_settings(content);
         assert_eq!(parsed.zone_rules.len(), 5);
-        assert!(parsed.zone_rules.contains(&("open".to_owned(), "OpenPortsTCP".to_owned(), "80".to_owned())));
-        assert!(parsed.zone_rules.contains(&("open".to_owned(), "OpenPortsTCP".to_owned(), "443".to_owned())));
-        assert!(parsed.zone_rules.contains(&("open".to_owned(), "OpenPortsTCP".to_owned(), "8080".to_owned())));
-        assert!(parsed.zone_rules.contains(&("ww".to_owned(), "OpenPortsUDP".to_owned(), "53".to_owned())));
-        assert!(parsed.zone_rules.contains(&("ww".to_owned(), "OpenPortsUDP".to_owned(), "123".to_owned())));
+        assert!(parsed.zone_rules.contains(&(
+            "open".to_owned(),
+            "OpenPortsTCP".to_owned(),
+            "80".to_owned()
+        )));
+        assert!(parsed.zone_rules.contains(&(
+            "open".to_owned(),
+            "OpenPortsTCP".to_owned(),
+            "443".to_owned()
+        )));
+        assert!(parsed.zone_rules.contains(&(
+            "open".to_owned(),
+            "OpenPortsTCP".to_owned(),
+            "8080".to_owned()
+        )));
+        assert!(parsed.zone_rules.contains(&(
+            "ww".to_owned(),
+            "OpenPortsUDP".to_owned(),
+            "53".to_owned()
+        )));
+        assert!(parsed.zone_rules.contains(&(
+            "ww".to_owned(),
+            "OpenPortsUDP".to_owned(),
+            "123".to_owned()
+        )));
     }
 }

@@ -1,6 +1,76 @@
 //! `api_keys` entity model.
 
 use sea_orm::entity::prelude::*;
+use sea_orm::sea_query::{ArrayType, ColumnType, Nullable, ValueType, ValueTypeErr};
+use sea_orm::{ColIdx, QueryResult, TryGetError, TryGetable};
+use serde::{Deserialize, Serialize};
+
+/// Semantic two-variant API key capability flag persisted as SQL `BOOLEAN`.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "bool", into = "bool")]
+pub enum ScopeAccess {
+    /// Permission is not granted.
+    #[default]
+    Denied,
+    /// Permission is granted.
+    Granted,
+}
+
+impl ScopeAccess {
+    /// Returns `true` when this scope permission is granted.
+    #[must_use]
+    pub const fn is_granted(self) -> bool {
+        matches!(self, Self::Granted)
+    }
+}
+
+impl From<bool> for ScopeAccess {
+    fn from(value: bool) -> Self {
+        if value { Self::Granted } else { Self::Denied }
+    }
+}
+
+impl From<ScopeAccess> for bool {
+    fn from(value: ScopeAccess) -> Self {
+        value.is_granted()
+    }
+}
+
+impl From<ScopeAccess> for sea_orm::Value {
+    fn from(value: ScopeAccess) -> Self {
+        Self::Bool(Some(value.is_granted()))
+    }
+}
+
+impl TryGetable for ScopeAccess {
+    fn try_get_by<I: ColIdx>(res: &QueryResult, index: I) -> Result<Self, TryGetError> {
+        bool::try_get_by(res, index).map(Self::from)
+    }
+}
+
+impl ValueType for ScopeAccess {
+    fn try_from(v: sea_orm::Value) -> Result<Self, ValueTypeErr> {
+        <bool as ValueType>::try_from(v).map(Self::from)
+    }
+
+    fn type_name() -> String {
+        "ScopeAccess".to_owned()
+    }
+
+    fn array_type() -> ArrayType {
+        <bool as ValueType>::array_type()
+    }
+
+    fn column_type() -> ColumnType {
+        <bool as ValueType>::column_type()
+    }
+}
+
+impl Nullable for ScopeAccess {
+    fn null() -> sea_orm::Value {
+        sea_orm::Value::Bool(None)
+    }
+}
 
 /// The `api_keys` row.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -21,15 +91,15 @@ pub struct Model {
     /// Full administrative bypass flag.
     pub is_master: bool,
     /// Allows creating, viewing, updating, and revoking sub-keys.
-    pub can_manage_keys: bool,
+    pub can_manage_keys: ScopeAccess,
     /// Allows editing `firewall.settings`, zone rules, and Docker inter-container rules.
-    pub can_manage_settings: bool,
+    pub can_manage_settings: ScopeAccess,
     /// Allows editing and validating `firewall.rules.special`.
-    pub can_manage_special_rules: bool,
+    pub can_manage_special_rules: ScopeAccess,
     /// Allows editing and testing `firewall.get.list` blocklist feeds.
-    pub can_manage_blocklists: bool,
+    pub can_manage_blocklists: ScopeAccess,
     /// Allows generating files on disk and triggering `simply_hook_executor`.
-    pub can_deploy_and_reload: bool,
+    pub can_deploy_and_reload: ScopeAccess,
     /// Delegating parent key (`ON DELETE CASCADE`).
     pub parent_key_id: Option<Uuid>,
     /// Comma-separated IP/CIDR allowlist.

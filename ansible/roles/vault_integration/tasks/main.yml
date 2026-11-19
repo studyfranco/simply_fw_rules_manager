@@ -773,10 +773,11 @@
 # ==============================================================================
 # 4. simply_ip_vault: IPv6 /48 Normalization Setting, Groups, Webhooks & Whitelist Key
 # ==============================================================================
-- name: Configure simply_ip_vault settings, groups, webhooks and simply_white_list Daughter key
+- name: Configure simply_ip_vault settings, groups, webhooks and scoped Daughter keys
   ansible.builtin.shell:
     cmd: |
       set -euo pipefail
+      umask 077
       VAULT_URL="{{ effective_vault_host_url }}"
       API_KEY="{{ effective_vault_api_key }}"
       SECRET="{{ effective_vault_signing_secret }}"
@@ -807,19 +808,51 @@
       CHANGED=false
       WL_SECRETS_CHANGED=false
 
+      REMOTE_DENIED_FILE=""
+      ALLOW_REMOTE_HOST_FALLBACK=true
+      if [ "$VAULT_MODE" = "remote" ]; then
+        REMOTE_DENIED_FILE=$(mktemp "$SECRETS_DIR/.vault-denied.XXXXXX")
+        finish_remote_provisioning() {
+          local status=$?
+          if [ "$status" -ne 0 ] && [ "$ALLOW_REMOTE_HOST_FALLBACK" = "true" ] && [ -s "$REMOTE_DENIED_FILE" ]; then
+            echo "remote_host_credentials=true"
+            status=0
+          fi
+          rm -f "$REMOTE_DENIED_FILE"
+          exit "$status"
+        }
+        trap finish_remote_provisioning EXIT
+      fi
+
       vault_call() {
         local method="$1" path="$2" body="${3:-}"
-        local ts sig
+        local ts sig response status
         ts=$(date -u +%s)
         sig=$(printf '%s\n%s\n%s\n%s' "$method" "${path%%\?*}" "$ts" "$body" \
               | openssl dgst -sha256 -hmac "${SECRET}" | sed 's/^.*= //')
-        curl -fsS -X "$method" \
+        response=$(curl -fsS -w $'\n%{http_code}' -X "$method" \
           -H "X-API-Key: ${API_KEY}" \
           -H "X-Timestamp: ${ts}" \
           -H "X-Signature-256: sha256=${sig}" \
           ${body:+-H "Content-Type: application/json" -d "$body"} \
-          "${VAULT_URL}${path}"
+          "${VAULT_URL}${path}") || {
+          status=$?
+          if [ -n "$REMOTE_DENIED_FILE" ] && [ "${response##*$'\n'}" = "403" ]; then
+            printf '403\n' > "$REMOTE_DENIED_FILE"
+          fi
+          return "$status"
+        }
+        printf '%s' "${response%$'\n'*}"
       }
+
+      if [ "$VAULT_MODE" = "remote" ]; then
+        REMOTE_KEYS=$(vault_call GET "/api/keys")
+        if jq -e --arg prefix "${API_KEY:0:8}" '
+          any(.[]; .is_master == true and .prefix == $prefix)
+        ' <<< "$REMOTE_KEYS" >/dev/null; then
+          ALLOW_REMOTE_HOST_FALLBACK=false
+        fi
+      fi
 
       # A. Sync runtime IPv6 /48 normalization setting on local vault (Master-only)
       if [ "$VAULT_MODE" = "local" ]; then
@@ -835,24 +868,33 @@
       ensure_group() {
         local gname="$1" gtype="${2:-banlist}"
         local groups_json gid cbody
-        groups_json=$(vault_call GET "/api/groups")
+        groups_json=$(vault_call GET "/api/groups") || return
         gid=$(printf '%s' "$groups_json" | jq -r --arg n "$gname" '.[] | select(.name == $n) | .id' | head -n1)
         if [ -z "$gid" ] || [ "$gid" = "null" ]; then
           cbody=$(jq -nc --arg name "$gname" --arg gt "$gtype" '{name: $name, group_type: $gt}')
-          gid=$(vault_call POST "/api/groups" "$cbody" | jq -r '.id')
+          gid=$(vault_call POST "/api/groups" "$cbody" | jq -er '.id') || return
           CHANGED=true
         fi
         printf '%s' "$gid"
       }
 
       GROUP_ID=$(ensure_group "$GROUP_NAME" "banlist")
-      if [ "$DEPLOY_SYNC" = "true" ]; then
-        ensure_group "external_banlist" "banlist" >/dev/null
-        ensure_group "vpn" "banlist" >/dev/null
-      fi
       WL_GROUP_ID=""
       if [ "$CONFIGURE_WL" = "true" ] || [ "$DEPLOY_WL" = "true" ]; then
         WL_GROUP_ID=$(ensure_group "$WL_GROUP_NAME" "whitelist")
+      fi
+
+      if [ "$DEPLOY_SYNC" = "true" ]; then
+        SYNC_GROUP_NAMES=$(jq -r '[.[].target_group_name] | unique[]' <<< "$SYNC_GROUPS_SPEC")
+        while IFS= read -r name; do
+          if [ -n "$name" ]; then
+            if [ "$name" = "$WL_GROUP_NAME" ]; then
+              ensure_group "$name" "whitelist" >/dev/null
+            else
+              ensure_group "$name" "banlist" >/dev/null
+            fi
+          fi
+        done <<< "$SYNC_GROUP_NAMES"
       fi
 
       WEBHOOKS_JSON=$(vault_call GET "/api/webhooks")
@@ -994,18 +1036,17 @@
           "$FORCE_BAN_WH"
       fi
 
+      write_secret_file() {
+        local dest="$1" val="$2" owner="$3" tmp
+        tmp=$(mktemp "${dest}.XXXXXX")
+        printf '%s' "$val" > "$tmp"
+        chown "$owner" "$tmp"
+        mv -f "$tmp" "$dest"
+      }
+
       # F. Provision scoped Vault Daughter API Key for simply_white_list
       #    Verified via Master GET /api/keys (.prefix check) so bound_ips never blocks host Ansible!
       if [ "$DEPLOY_WL" = "true" ] && [ -n "$WL_GROUP_ID" ]; then
-        write_secret_file() {
-          local dest="$1" val="$2"
-          local tmp="${dest}.tmp.$$"
-          printf '%s' "$val" > "$tmp"
-          chmod 0600 "$tmp"
-          chown "$WL_OWNER" "$tmp"
-          mv -f "$tmp" "$dest"
-        }
-
         KEYS_JSON=$(vault_call GET "/api/keys")
         EXISTING_WL_KEY=$(printf '%s' "$KEYS_JSON" | jq -c '.[] | select(.name == "simply_white_list")' | head -n1)
         LOCAL_PREFIX=""
@@ -1027,8 +1068,8 @@
             )')
           CREATE_RESP=$(vault_call POST "/api/keys" "$CREATE_BODY")
           WL_KEY_ID=$(printf '%s' "$CREATE_RESP" | jq -r '.id')
-          write_secret_file "$WL_AK_FILE" "$(printf '%s' "$CREATE_RESP" | jq -r '.plaintext_key')"
-          write_secret_file "$WL_SEC_FILE" "$(printf '%s' "$CREATE_RESP" | jq -r '.signing_secret')"
+          write_secret_file "$WL_AK_FILE" "$(printf '%s' "$CREATE_RESP" | jq -r '.plaintext_key')" "$WL_OWNER"
+          write_secret_file "$WL_SEC_FILE" "$(printf '%s' "$CREATE_RESP" | jq -r '.signing_secret')" "$WL_OWNER"
           WL_SECRETS_CHANGED=true
           CHANGED=true
         else
@@ -1056,15 +1097,18 @@
           # Rotate key+secret in place if local files are missing or prefix drifted
           if [ ! -s "$WL_AK_FILE" ] || [ ! -s "$WL_SEC_FILE" ] || [ "$CUR_PREFIX" != "$LOCAL_PREFIX" ]; then
             ROT_RESP=$(vault_call POST "/api/keys/${WL_KEY_ID}/rotate" "{}")
-            write_secret_file "$WL_AK_FILE" "$(printf '%s' "$ROT_RESP" | jq -r '.plaintext_key')"
-            write_secret_file "$WL_SEC_FILE" "$(printf '%s' "$ROT_RESP" | jq -r '.signing_secret')"
+            write_secret_file "$WL_AK_FILE" "$(printf '%s' "$ROT_RESP" | jq -r '.plaintext_key')" "$WL_OWNER"
+            write_secret_file "$WL_SEC_FILE" "$(printf '%s' "$ROT_RESP" | jq -r '.signing_secret')" "$WL_OWNER"
             WL_SECRETS_CHANGED=true
             CHANGED=true
           fi
         fi
 
+        chown "$WL_OWNER" "$WL_AK_FILE" "$WL_SEC_FILE"
+        chmod 0600 "$WL_AK_FILE" "$WL_SEC_FILE"
+
         # Enforce strict single-group ACL (can_read/write/delete=true, can_manage=false on WL_GROUP_ID only)
-        WL_PERM_MATCH=$(printf '%s' "${EXISTING_WL_KEY:-{}}" | jq -r --arg gid "$WL_GROUP_ID" \
+        WL_PERM_MATCH=$(printf '%s' "${EXISTING_WL_KEY:-null}" | jq -r --arg gid "$WL_GROUP_ID" \
           '[(.group_permissions // [])[] | select(.group_id == $gid and .can_read == true and .can_write == true and .can_delete == true and .can_manage == false)] | length == 1')
         if [ -z "$EXISTING_WL_KEY" ] || [ "$WL_PERM_MATCH" != "true" ]; then
           PERM_BODY=$(jq -nc --arg gid "$WL_GROUP_ID" \
@@ -1084,18 +1128,190 @@
         fi
       fi
 
+      # G. Reconcile each consumer's complete ACL and retain valid credentials.
+      KEYS_JSON=$(vault_call GET "/api/keys")
+      GROUPS_JSON=$(vault_call GET "/api/groups")
+
+      group_permission() {
+        local name="$1" read="$2" write="$3" delete="$4" id
+        id=$(jq -er --arg name "$name" '.[] | select(.name == $name) | .id // empty' <<< "$GROUPS_JSON") || {
+          echo "Vault group does not exist: $name" >&2
+          return 1
+        }
+        jq -nc --arg group_id "$id" --argjson can_read "$read" \
+          --argjson can_write "$write" --argjson can_delete "$delete" \
+          '{$group_id, $can_read, $can_write, $can_delete, can_manage: false}'
+      }
+
+      reconcile_daughter() {
+        local name="$1" binding="$2" owner="$3" stem="$4" grants="$5"
+        local key_file="${SECRETS_DIR}/${stem}vault_api_key.txt"
+        local secret_file="${SECRETS_DIR}/${stem}vault_signing_secret.txt"
+        local existing id config prefix credentials="" grant extra extras key secret
+        existing=$(jq -c --arg name "$name" '
+          [.[] | select(.name == $name)] |
+          if length > 1 then error("duplicate Vault key name") else .[0] end
+        ' <<< "$KEYS_JSON")
+        if [ "$(jq -r '.is_master // false' <<< "$existing")" = "true" ]; then
+          echo "Reserved Vault Daughter key name belongs to Master: $name" >&2
+          return 1
+        fi
+
+        config=$(jq -nc --arg binding "$binding" '{can_manage_keys: false, can_manage_webhooks: false, can_create_groups: false}
+           + (if $binding == "" then {} else {bound_ips: $binding} end)')
+        if [ "$existing" = "null" ]; then
+          credentials=$(vault_call POST "/api/keys" "$(jq -c --arg name "$name" '. + {$name}' <<< "$config")")
+          id=$(jq -er '.id' <<< "$credentials")
+          CHANGED=true
+        else
+          id=$(jq -er '.id' <<< "$existing")
+          if ! jq -e --arg binding "$binding" '
+            (.bound_ips // "") == $binding and
+            .can_manage_keys == false and .can_manage_webhooks == false and .can_create_groups == false
+          ' <<< "$existing" >/dev/null; then
+            vault_call PUT "/api/keys/${id}" "$config" >/dev/null
+            CHANGED=true
+          fi
+        fi
+
+        extras=$(jq -r --argjson desired "$grants" '
+          (.group_permissions // [])[] | .group_id as $id |
+          select(all($desired[]; .group_id != $id)) | .group_id
+        ' <<< "$existing")
+        for extra in $extras; do
+          vault_call DELETE "/api/keys/${id}/permissions/${extra}" >/dev/null
+          CHANGED=true
+        done
+        while IFS= read -r grant; do
+          if ! jq -e --argjson grant "$grant" '
+            any((.group_permissions // [])[];
+              {group_id, can_read, can_write, can_delete, can_manage} == $grant)
+          ' <<< "$existing" >/dev/null; then
+            vault_call POST "/api/keys/${id}/groups" "$grant" >/dev/null
+            CHANGED=true
+          fi
+        done < <(jq -c '.[]' <<< "$grants")
+
+        if [ -z "$credentials" ]; then
+          prefix=$(jq -er '.prefix' <<< "$existing")
+          if [ ! -s "$key_file" ] || [ ! -s "$secret_file" ] ||
+             [ "$(head -c "${#prefix}" "$key_file")" != "$prefix" ]; then
+            credentials=$(vault_call POST "/api/keys/${id}/rotate" "{}")
+          fi
+        fi
+        if [ -n "$credentials" ]; then
+          key=$(jq -er '.plaintext_key | strings | select(length > 0)' <<< "$credentials")
+          secret=$(jq -er '.signing_secret | strings | select(length > 0)' <<< "$credentials")
+          # If interrupted between writes, a missing secret forces rotation on retry.
+          if [ "$name" = "simply_ip_exporter" ]; then
+            touch "$SECRETS_DIR/exporter_vault_credentials_pending"
+          fi
+          rm -f "$secret_file"
+          write_secret_file "$key_file" "$key" "$owner"
+          write_secret_file "$secret_file" "$secret" "$owner"
+          CHANGED=true
+        fi
+        chown "$owner" "$key_file" "$secret_file"
+        chmod 0600 "$key_file" "$secret_file"
+      }
+
+      host_grants=$(group_permission "$GROUP_NAME" false true false)
+      if [ -n "$WL_GROUP_ID" ]; then
+        whitelist_grant=$(group_permission "$WL_GROUP_NAME" false false true)
+        host_grants="$host_grants"$'\n'"$whitelist_grant"
+      fi
+      reconcile_daughter firewall-host-reporter "$HOST_BOUND_IPS" root:root host_ \
+        "$(jq -s '.' <<< "$host_grants")"
+      ALLOW_REMOTE_HOST_FALLBACK=false
+
+      if [ "$DEPLOY_EXPORTER" = "true" ]; then
+        IFS=, read -ra exporter_groups <<< "$EXPORTER_GROUP_NAMES"
+        if [ -n "$WL_GROUP_ID" ]; then
+          exporter_groups+=("$WL_GROUP_NAME")
+        fi
+        exporter_grants=$(
+          for name in "${exporter_groups[@]}"; do
+            group_permission "$name" true false false || exit 1
+          done
+        )
+        reconcile_daughter simply_ip_exporter "$EXPORTER_BOUND_IPS" 1125:1125 "" \
+          "$(jq -s 'unique_by(.group_id)' <<< "$exporter_grants")"
+      fi
+
+      if [ "$DEPLOY_SYNC" = "true" ]; then
+        sync_grants=$(
+          while IFS= read -r name; do
+            if [ -n "$name" ]; then
+              group_permission "$name" true true true || exit 1
+            fi
+          done <<< "$SYNC_GROUP_NAMES"
+        )
+        reconcile_daughter simply_ip_sync "$SYNC_BOUND_IPS" root:root sync_ \
+          "$(jq -s '.' <<< "$sync_grants")"
+      fi
+
       echo "changed=${CHANGED}"
       echo "wl_secrets_changed=${WL_SECRETS_CHANGED}"
   args:
     executable: /bin/bash
   environment:
+    DEPLOY_EXPORTER: "{{ deploy_simply_ip_exporter | bool | ternary('true', 'false') }}"
+    EXPORTER_GROUP_NAMES: "{{ exporter_endpoint_groups }}"
+    SYNC_GROUPS_SPEC: "{{ sync_default_destination_groups | to_json }}"
+    HOST_BOUND_IPS: "{{ docker_gateway_isolate_ip if vault_mode == 'local' else '' }}"
+    EXPORTER_BOUND_IPS: >-
+      {{
+        (docker_container_ips.simply_ip_exporter.isolate_ipv4 if (pin_vault_clients_ipv4 | bool) else docker_net_isolate_ipv4_subnet)
+        ~ (',' ~ (docker_container_ips.simply_ip_exporter.isolate_ipv6 if (pin_vault_clients_ipv6 | bool) else docker_net_isolate_ipv6_subnet)
+           if (docker_enable_ipv6 | default(true) | bool) else '')
+      }}
+    SYNC_BOUND_IPS: >-
+      {{
+        (docker_container_ips.simply_ip_sync.isolate_ipv4 if (pin_vault_clients_ipv4 | bool) else docker_net_isolate_ipv4_subnet)
+        ~ (',' ~ (docker_container_ips.simply_ip_sync.isolate_ipv6 if (pin_vault_clients_ipv6 | bool) else docker_net_isolate_ipv6_subnet)
+           if (docker_enable_ipv6 | default(true) | bool) else '')
+      }}
     ABUSEIPDB_KEY: "{{ abuseipdb_api_key | default('') }}"
+  vars:
+    pin_vault_clients_ipv4: "{{ docker_pin_container_ips | default(true) | bool }}"
+    pin_vault_clients_ipv6: "{{ (pin_vault_clients_ipv4 | bool) and (docker_pin_container_ipv6 | default(true) | bool) }}"
   register: vault_cfg_res
   changed_when: "'changed=true' in vault_cfg_res.stdout"
   when:
     - effective_vault_api_key | length > 0
     - effective_vault_signing_secret | length > 0
   no_log: true
+
+- name: Configure host Vault reporting credentials
+  when: vault_cfg_res is not skipped
+  no_log: true
+  block:
+    - name: Read dedicated host reporter credentials
+      ansible.builtin.slurp:
+        src: "{{ firewall_secrets_dir }}/host_vault_{{ item }}.txt"
+      loop: [api_key, signing_secret]
+      register: host_vault_credentials
+      when: "'remote_host_credentials=true' not in vault_cfg_res.stdout"
+
+    - name: Finalize host Vault configuration
+      ansible.builtin.template:
+        src: "{{ role_path }}/../firewall/templates/firewall.vault.conf.j2"
+        dest: "{{ firewall_dir }}/firewall.vault.conf"
+        owner: root
+        group: root
+        mode: "0600"
+      vars:
+        host_vault_api_key: "{{ effective_vault_api_key if ('remote_host_credentials=true' in vault_cfg_res.stdout) else (host_vault_credentials.results[0].content | b64decode) }}"
+        host_vault_signing_secret: "{{ effective_vault_signing_secret if ('remote_host_credentials=true' in vault_cfg_res.stdout) else (host_vault_credentials.results[1].content | b64decode) }}"
+
+- name: Require remote Vault Daughter provisioning for enabled consumers
+  ansible.builtin.assert:
+    that:
+      - not (deploy_simply_ip_exporter | bool or deploy_simply_ip_sync | bool or deploy_simply_white_list | bool)
+    fail_msg: Remote Vault denied key provisioning. Host reporting uses the supplied credentials. Enabled Vault containers require delegation access.
+  when:
+    - vault_cfg_res is not skipped
+    - "'remote_host_credentials=true' in vault_cfg_res.stdout"
 
 - name: Recreate simply_white_list if Vault Daughter API credentials changed
   ansible.builtin.command:
@@ -1157,23 +1373,15 @@
     - effective_vault_api_key | length > 0
     - effective_vault_signing_secret | length > 0
   block:
-    - name: Ensure simply_ip_exporter holds live Vault API credentials on disk
-      ansible.builtin.copy:
-        content: "{{ item.content }}"
-        dest: "{{ firewall_secrets_dir }}/{{ item.name }}.txt"
-        owner: "1125"
-        group: "1125"
-        mode: "0600"
-      loop:
-        - { name: vault_api_key, content: "{{ effective_vault_api_key }}" }
-        - { name: vault_signing_secret, content: "{{ effective_vault_signing_secret }}" }
-      register: exporter_secrets_copy
-      no_log: true
+    - name: Check whether simply_ip_exporter needs to remount rotated credentials
+      ansible.builtin.stat:
+        path: "{{ firewall_secrets_dir }}/exporter_vault_credentials_pending"
+      register: exporter_credentials_pending
 
     - name: Recreate simply_ip_exporter if Vault secret files changed
       ansible.builtin.command:
         cmd: docker compose -f {{ compose_dir }}/docker-compose.yml up -d --force-recreate simply_ip_exporter
-      when: exporter_secrets_copy is changed
+      when: exporter_credentials_pending.stat.exists
 
     - name: Refresh simply_ip_exporter live bridge IP and firewall rules after recreate
       ansible.builtin.shell:
@@ -1190,14 +1398,13 @@
       args:
         executable: /bin/bash
       register: exporter_new_ip_raw
-      when: exporter_secrets_copy is changed
+      when: exporter_credentials_pending.stat.exists
       changed_when: false
 
     - name: Update effective_exporter_host_url after simply_ip_exporter recreate
       ansible.builtin.set_fact:
         effective_exporter_host_url: "{{ 'http://' ~ (exporter_new_ip_raw.stdout | trim) ~ ':3002' }}"
       when:
-        - exporter_secrets_copy is changed
         - exporter_new_ip_raw.stdout is defined
         - exporter_new_ip_raw.stdout | trim | length > 0
 
@@ -1210,7 +1417,13 @@
       until: exporter_post_secret_ready.status is defined and exporter_post_secret_ready.status == 200
       retries: 20
       delay: 2
-      when: exporter_secrets_copy is changed
+      when: exporter_credentials_pending.stat.exists
+
+    - name: Clear exporter credential remount marker after recreation
+      ansible.builtin.file:
+        path: "{{ firewall_secrets_dir }}/exporter_vault_credentials_pending"
+        state: absent
+      when: exporter_credentials_pending.stat.exists
 
     - name: Ensure simply_ip_exporter banlist and whitelist endpoints exist and stay synced
       ansible.builtin.shell:
@@ -1392,8 +1605,10 @@
       SYNC_KEY="{{ effective_sync_api_key }}"
       SYNC_SECRET="{{ effective_sync_signing_secret }}"
       VAULT_URL="{{ effective_vault_container_url }}"
-      VAULT_KEY="{{ effective_vault_api_key }}"
-      VAULT_SECRET="{{ effective_vault_signing_secret }}"
+      umask 077
+      VAULT_KEY=$(<"{{ firewall_secrets_dir }}/sync_vault_api_key.txt")
+      VAULT_SECRET=$(<"{{ firewall_secrets_dir }}/sync_vault_signing_secret.txt")
+      APPLIED_FILE="{{ firewall_secrets_dir }}/sync_vault_connection.sha256"
       CHANGED=false
 
       sync_call() {
@@ -1410,12 +1625,18 @@
           "${SYNC_URL}${path}"
       }
 
-      # 1. Ensure target Vault endpoint is registered and credentials match
+      connection_fingerprint() {
+        printf '%s\n' "$VAULT_ID" "$VAULT_URL" "$VAULT_KEY" "$VAULT_SECRET" | sha256sum
+      }
+
+      # 1. Ensure target Vault endpoint is registered and credentials match.
+      # Keep a local receipt because Sync does not expose the stored signing secret.
       VAULTS_JSON=$(sync_call GET "/api/vaults")
-      VAULT_ID=$(printf '%s' "$VAULTS_JSON" | jq -r --arg u "$VAULT_URL" '.[] | select(.target_url == $u) | .id' | head -n1)
-      if [ -z "$VAULT_ID" ] || [ "$VAULT_ID" = "null" ]; then
-        VAULT_ID=$(printf '%s' "$VAULTS_JSON" | jq -r '.[0].id // empty')
-      fi
+      VAULT_ID=$(jq -r --arg url "$VAULT_URL" '
+        (first(.[] | select(.name == "Default Vault")) //
+         first(.[] | select(.target_url == $url)) //
+         if length == 1 then .[0] else null end) | .id // empty
+      ' <<< "$VAULTS_JSON")
       if [ -z "$VAULT_ID" ] || [ "$VAULT_ID" = "null" ]; then
         V_BODY=$(jq -nc \
           --arg name "Default Vault" \
@@ -1427,7 +1648,12 @@
         CHANGED=true
       else
         CUR_V_URL=$(printf '%s' "$VAULTS_JSON" | jq -r --arg id "$VAULT_ID" '.[] | select(.id == $id) | .target_url')
-        if [ "$CUR_V_URL" != "$VAULT_URL" ]; then
+        DESIRED=$(connection_fingerprint)
+        APPLIED=""
+        if [ -s "$APPLIED_FILE" ]; then
+          APPLIED=$(<"$APPLIED_FILE")
+        fi
+        if [ "$CUR_V_URL" != "$VAULT_URL" ] || [ "$DESIRED" != "$APPLIED" ]; then
           V_UPD=$(jq -nc \
             --arg url "$VAULT_URL" \
             --arg ak "$VAULT_KEY" \
@@ -1438,8 +1664,11 @@
         fi
       fi
 
+      if [ "$CHANGED" = "true" ]; then
+        printf '%s\n' "$(connection_fingerprint)" > "$APPLIED_FILE"
+      fi
+
       # 2. Ensure default destination groups and feeds exist (flat DestinationGroupResponse array)
-      GROUPS_SPEC='{{ sync_default_destination_groups | to_json }}'
       EXISTING_GROUPS=$(sync_call GET "/api/destination-groups")
 
       while IFS= read -r grp; do
@@ -1548,6 +1777,7 @@
   args:
     executable: /bin/bash
   environment:
+    GROUPS_SPEC: "{{ sync_default_destination_groups | to_json }}"
     ABUSEIPDB_KEY: "{{ abuseipdb_api_key | default('') }}"
   register: sync_cfg_res
   changed_when: "'changed=true' in sync_cfg_res.stdout"
@@ -1560,20 +1790,8 @@
   no_log: true
 
 # ==============================================================================
-# 7. Host Scripts Finalization & Summary
+# 7. Vault Integration Summary
 # ==============================================================================
-- name: Finalize /etc/firewall/firewall.vault.conf with live Vault host URL and credentials
-  ansible.builtin.template:
-    src: "{{ role_path }}/../firewall/templates/firewall.vault.conf.j2"
-    dest: "{{ firewall_dir }}/firewall.vault.conf"
-    owner: root
-    group: root
-    mode: "0600"
-  when:
-    - effective_vault_api_key | length > 0
-    - effective_vault_signing_secret | length > 0
-  no_log: true
-
 - name: Display Vault integration and peering summary
   ansible.builtin.debug:
     msg:

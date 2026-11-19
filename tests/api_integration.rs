@@ -46,11 +46,11 @@ async fn setup_test_env() -> (axum::Router, AppState) {
         signing_secret: Set(Some(sealed_secret)),
         prefix: Set("test-mas".to_owned()),
         is_master: Set(true),
-        can_manage_keys: Set(true),
-        can_manage_settings: Set(true),
-        can_manage_special_rules: Set(true),
-        can_manage_blocklists: Set(true),
-        can_deploy_and_reload: Set(true),
+        can_manage_keys: Set(api_key::ScopeAccess::Granted),
+        can_manage_settings: Set(api_key::ScopeAccess::Granted),
+        can_manage_special_rules: Set(api_key::ScopeAccess::Granted),
+        can_manage_blocklists: Set(api_key::ScopeAccess::Granted),
+        can_deploy_and_reload: Set(api_key::ScopeAccess::Granted),
         parent_key_id: Set(None),
         bound_ips: Set(None),
         created_at: Set(now),
@@ -84,7 +84,11 @@ fn signed_request_with_ts(
         .uri(uri)
         .header("X-API-Key", api_key)
         .header("X-Timestamp", timestamp)
-        .header("X-Signature-256", sig);
+        .header("X-Signature-256", sig)
+        .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            8080,
+        ))));
 
     if body_opt.is_some() {
         builder = builder.header("Content-Type", "application/json");
@@ -101,7 +105,14 @@ fn signed_request(
     body_opt: Option<&Value>,
 ) -> Request<Body> {
     let timestamp = Utc::now().timestamp().to_string();
-    signed_request_with_ts(method_str, uri, api_key, signing_secret, body_opt, &timestamp)
+    signed_request_with_ts(
+        method_str,
+        uri,
+        api_key,
+        signing_secret,
+        body_opt,
+        &timestamp,
+    )
 }
 
 async fn response_json(resp: axum::response::Response) -> (StatusCode, Value) {
@@ -154,6 +165,10 @@ async fn health_and_example_bootstrap_and_canonical_auth_work() {
             .oneshot(
                 Request::builder()
                     .uri("/api/firewall/settings")
+                    .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        8080,
+                    ))))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -321,33 +336,11 @@ async fn special_rules_validator_and_refactored_helpers_work() {
     assert_eq!(ok_body["validation"]["variables_ok"], true);
 }
 
-#[tokio::test]
-async fn blocklist_live_test_and_atomic_generate_and_hook_reload_work() {
-    let (app, _state) = setup_test_env().await;
-    let mock_server = MockServer::start().await;
-
-    // Mock a plaintext IPv4/IPv6/CIDR feed (e.g. from simply_ip_exporter)
-    Mock::given(method("GET"))
-        .and(path("/feed/v1/abuseipdb/list.txt"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string("# Exported feed\n198.51.100.0/24\n203.0.113.42\n2001:db8::/32\n"),
-        )
-        .mount(&mock_server)
-        .await;
-
-    // Mock simply_hook_executor endpoint
-    Mock::given(method("POST"))
-        .and(path("/api/hooks/firewall-reload/execute"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "status": "SUCCESS",
-            "exit_code": 0,
-            "stdout": "Firewall reloaded"
-        })))
-        .mount(&mock_server)
-        .await;
-
-    // 1. Add the exporter blocklist feed
+async fn seed_and_test_blocklist_generation(
+    app: &axum::Router,
+    mock_server: &MockServer,
+    tmp_dir: &tempfile::TempDir,
+) {
     let create_bl = json!({
         "name": "abuseipdb_exporter",
         "url": format!("{}/feed/v1/abuseipdb/list.txt", mock_server.uri()),
@@ -365,7 +358,6 @@ async fn blocklist_live_test_and_atomic_generate_and_hook_reload_work() {
     assert_eq!(st, StatusCode::CREATED);
     let bl_id = bl_created["id"].as_str().unwrap();
 
-    // 2. Test the blocklist URL
     let req = signed_request(
         "POST",
         &format!("/api/firewall/blocklists/{bl_id}/test"),
@@ -379,8 +371,6 @@ async fn blocklist_live_test_and_atomic_generate_and_hook_reload_work() {
     assert_eq!(test_res["valid_ipv4_count"], 2);
     assert_eq!(test_res["valid_ipv6_count"], 1);
 
-    // 3. Configure output_dir to a temp directory and hook_executor_url to mock_server
-    let tmp_dir = tempfile::tempdir().expect("tempdir");
     let update_cfg = json!({
         "output_dir": tmp_dir.path().to_str().unwrap(),
         "hook_executor_url": mock_server.uri(),
@@ -395,10 +385,43 @@ async fn blocklist_live_test_and_atomic_generate_and_hook_reload_work() {
         TEST_MASTER_SECRET,
         Some(&update_cfg),
     );
-    let (st, _) = response_json(app.clone().oneshot(req).await.unwrap()).await;
+    let (st, settings_res) = response_json(app.clone().oneshot(req).await.unwrap()).await;
     assert_eq!(st, StatusCode::OK);
+    assert_eq!(settings_res["has_hook_api_key"], true);
+    assert_eq!(settings_res["has_hook_signing_secret"], true);
+    assert!(
+        settings_res.get("hook_executor_api_key").is_none(),
+        "plaintext hook_executor_api_key must never be returned in API responses"
+    );
+}
 
-    // 4. Trigger Generate & Reload
+#[tokio::test]
+async fn blocklist_live_test_and_atomic_generate_and_hook_reload_work() {
+    let (app, _state) = setup_test_env().await;
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/feed/v1/abuseipdb/list.txt"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("# Exported feed\n198.51.100.0/24\n203.0.113.42\n2001:db8::/32\n"),
+        )
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/hooks/firewall-reload/execute"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "SUCCESS",
+            "exit_code": 0,
+            "stdout": "Firewall reloaded"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let tmp_dir = tempfile::tempdir().expect("tempdir");
+    seed_and_test_blocklist_generation(&app, &mock_server, &tmp_dir).await;
+
     let req = signed_request(
         "POST",
         "/api/firewall/generate-and-reload",
@@ -411,13 +434,11 @@ async fn blocklist_live_test_and_atomic_generate_and_hook_reload_work() {
     assert_eq!(gen_res["files_written"].as_array().unwrap().len(), 3);
     assert_eq!(gen_res["hook_result"]["status_code"], 200);
 
-    // Verify the 3 files exist on disk and firewall.get.list has no AbuseIPDB curl/jq logic
     let get_list_on_disk =
         std::fs::read_to_string(tmp_dir.path().join("firewall.get.list")).unwrap();
     assert!(get_list_on_disk.contains("abuseipdb_exporter"));
     assert!(!get_list_on_disk.contains("api.abuseipdb.com"));
 
-    // 5. Verify Audit Logs recorded the actions
     let req = signed_request(
         "GET",
         "/api/audit-logs",
@@ -438,14 +459,7 @@ async fn blocklist_live_test_and_atomic_generate_and_hook_reload_work() {
     assert!(actions.contains(&"GENERATE_AND_RELOAD"));
 }
 
-#[tokio::test]
-async fn key_bound_ips_enforcement_and_daughter_key_rbac() {
-    use axum::extract::ConnectInfo;
-    use std::net::SocketAddr;
-
-    let (app, _state) = setup_test_env().await;
-
-    // 1. Master creates daughter key with bound_ips and blocklist management scope only
+async fn create_bound_operator_key(app: &axum::Router) -> (String, String) {
     let create_payload = json!({
         "name": "Operator Key",
         "can_manage_keys": false,
@@ -464,10 +478,82 @@ async fn key_bound_ips_enforcement_and_daughter_key_rbac() {
     );
     let (st, body) = response_json(app.clone().oneshot(req).await.unwrap()).await;
     assert_eq!(st, StatusCode::CREATED);
-    let op_key = body["raw_key"].as_str().unwrap().to_owned();
-    let op_secret = body["signing_secret"].as_str().unwrap().to_owned();
+    (
+        body["raw_key"].as_str().unwrap().to_owned(),
+        body["signing_secret"].as_str().unwrap().to_owned(),
+    )
+}
 
-    // 2. Request from permitted IP subnet (192.168.1.50) -> should succeed
+async fn assert_sig_prefix_and_replay_guards(
+    app: &axum::Router,
+    allowed_addr: std::net::SocketAddr,
+) {
+    use axum::extract::ConnectInfo;
+
+    let mut req_prefix = signed_request(
+        "GET",
+        "/api/settings",
+        TEST_MASTER_KEY,
+        TEST_MASTER_SECRET,
+        None,
+    );
+    req_prefix
+        .extensions_mut()
+        .insert(ConnectInfo(allowed_addr));
+    let current_sig = req_prefix
+        .headers()
+        .get("X-Signature-256")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let bare_hex = current_sig.strip_prefix("sha256=").unwrap();
+    req_prefix
+        .headers_mut()
+        .insert("X-Signature-256", bare_hex.parse().unwrap());
+    let (st_prefix, _) = response_json(app.clone().oneshot(req_prefix).await.unwrap()).await;
+    assert_eq!(st_prefix, StatusCode::UNAUTHORIZED);
+
+    let replay_ts = Utc::now().timestamp().to_string();
+    let mut req1 = signed_request_with_ts(
+        "GET",
+        "/api/settings?replay_test=1",
+        TEST_MASTER_KEY,
+        TEST_MASTER_SECRET,
+        None,
+        &replay_ts,
+    );
+    req1.extensions_mut().insert(ConnectInfo(allowed_addr));
+    let (st1, _) = response_json(app.clone().oneshot(req1).await.unwrap()).await;
+    assert_eq!(st1, StatusCode::OK);
+
+    let mut req2 = signed_request_with_ts(
+        "GET",
+        "/api/settings?replay_test=1",
+        TEST_MASTER_KEY,
+        TEST_MASTER_SECRET,
+        None,
+        &replay_ts,
+    );
+    req2.extensions_mut().insert(ConnectInfo(allowed_addr));
+    let (st2, err2) = response_json(app.clone().oneshot(req2).await.unwrap()).await;
+    assert_eq!(st2, StatusCode::UNAUTHORIZED);
+    assert!(
+        err2["error"]
+            .as_str()
+            .unwrap()
+            .contains("already been used")
+    );
+}
+
+#[tokio::test]
+async fn key_bound_ips_enforcement_and_daughter_key_rbac() {
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
+    let (app, _state) = setup_test_env().await;
+    let (op_key, op_secret) = create_bound_operator_key(&app).await;
+
     let mut req_allowed = signed_request(
         "GET",
         "/api/firewall/blocklists?probe=allowed",
@@ -476,11 +562,12 @@ async fn key_bound_ips_enforcement_and_daughter_key_rbac() {
         None,
     );
     let allowed_addr: SocketAddr = "192.168.1.50:54321".parse().unwrap();
-    req_allowed.extensions_mut().insert(ConnectInfo(allowed_addr));
+    req_allowed
+        .extensions_mut()
+        .insert(ConnectInfo(allowed_addr));
     let (st_allowed, _) = response_json(app.clone().oneshot(req_allowed).await.unwrap()).await;
     assert_eq!(st_allowed, StatusCode::OK);
 
-    // 3. Request from forbidden IP (172.16.0.1) -> should return 403 Forbidden
     let mut req_forbidden = signed_request(
         "GET",
         "/api/firewall/blocklists?probe=forbidden",
@@ -489,12 +576,14 @@ async fn key_bound_ips_enforcement_and_daughter_key_rbac() {
         None,
     );
     let forbidden_addr: SocketAddr = "172.16.0.1:54321".parse().unwrap();
-    req_forbidden.extensions_mut().insert(ConnectInfo(forbidden_addr));
-    let (st_forbidden, err_body) = response_json(app.clone().oneshot(req_forbidden).await.unwrap()).await;
+    req_forbidden
+        .extensions_mut()
+        .insert(ConnectInfo(forbidden_addr));
+    let (st_forbidden, err_body) =
+        response_json(app.clone().oneshot(req_forbidden).await.unwrap()).await;
     assert_eq!(st_forbidden, StatusCode::FORBIDDEN);
     assert_eq!(err_body["error"], "Client IP not allowed");
 
-    // 4. Operator tries to create another key without can_manage_keys -> 403 Forbidden
     let forbidden_create = json!({
         "name": "Sub key",
         "can_manage_keys": false
@@ -509,41 +598,315 @@ async fn key_bound_ips_enforcement_and_daughter_key_rbac() {
     req_rbac.extensions_mut().insert(ConnectInfo(allowed_addr));
     let (st_rbac, err_rbac) = response_json(app.clone().oneshot(req_rbac).await.unwrap()).await;
     assert_eq!(st_rbac, StatusCode::FORBIDDEN);
-    assert!(err_rbac["error"].as_str().unwrap().contains("Missing can_manage_keys"));
+    assert!(
+        err_rbac["error"]
+            .as_str()
+            .unwrap()
+            .contains("Missing can_manage_keys")
+    );
 
-    // 5. Operator tries to view audit logs -> strictly forbidden (Master-only)
     let mut req_audit_op = signed_request("GET", "/api/audit-logs", &op_key, &op_secret, None);
-    req_audit_op.extensions_mut().insert(ConnectInfo(allowed_addr));
-    let (st_audit_op, err_audit) = response_json(app.clone().oneshot(req_audit_op).await.unwrap()).await;
+    req_audit_op
+        .extensions_mut()
+        .insert(ConnectInfo(allowed_addr));
+    let (st_audit_op, err_audit) =
+        response_json(app.clone().oneshot(req_audit_op).await.unwrap()).await;
     assert_eq!(st_audit_op, StatusCode::FORBIDDEN);
     assert_eq!(err_audit["error"], "Only master keys can view audit logs");
 
-    // 6. Master tries to view audit logs -> 200 OK
-    let mut req_audit_master = signed_request("GET", "/api/audit-logs", TEST_MASTER_KEY, TEST_MASTER_SECRET, None);
-    req_audit_master.extensions_mut().insert(ConnectInfo(allowed_addr));
-    let (st_audit_master, _) = response_json(app.clone().oneshot(req_audit_master).await.unwrap()).await;
+    let mut req_audit_master = signed_request(
+        "GET",
+        "/api/audit-logs",
+        TEST_MASTER_KEY,
+        TEST_MASTER_SECRET,
+        None,
+    );
+    req_audit_master
+        .extensions_mut()
+        .insert(ConnectInfo(allowed_addr));
+    let (st_audit_master, _) =
+        response_json(app.clone().oneshot(req_audit_master).await.unwrap()).await;
     assert_eq!(st_audit_master, StatusCode::OK);
 
-    // 7. Signature prefix enforcement: stripping "sha256=" prefix fails authentication
-    let mut req_prefix = signed_request("GET", "/api/settings", TEST_MASTER_KEY, TEST_MASTER_SECRET, None);
-    req_prefix.extensions_mut().insert(ConnectInfo(allowed_addr));
-    let current_sig = req_prefix.headers().get("X-Signature-256").unwrap().to_str().unwrap().to_owned();
-    let bare_hex = current_sig.strip_prefix("sha256=").unwrap();
-    req_prefix.headers_mut().insert("X-Signature-256", bare_hex.parse().unwrap());
-    let (st_prefix, _) = response_json(app.clone().oneshot(req_prefix).await.unwrap()).await;
-    assert_eq!(st_prefix, StatusCode::UNAUTHORIZED);
+    assert_sig_prefix_and_replay_guards(&app, allowed_addr).await;
+}
 
-    // 8. Anti-replay guard rejects duplicated request
-    let replay_ts = Utc::now().timestamp().to_string();
-    let mut req1 = signed_request_with_ts("GET", "/api/settings?replay_test=1", TEST_MASTER_KEY, TEST_MASTER_SECRET, None, &replay_ts);
-    req1.extensions_mut().insert(ConnectInfo(allowed_addr));
-    let (st1, _) = response_json(app.clone().oneshot(req1).await.unwrap()).await;
-    assert_eq!(st1, StatusCode::OK);
+async fn assert_injection_and_ssrf_rejected(
+    app: &axum::Router,
+    state: &simply_fw_rules_manager::state::AppState,
+) {
+    let cases = [
+        (
+            "PUT",
+            "/api/firewall/settings",
+            json!({ "main_inter": "out\"; touch /tmp/pwn #" }),
+        ),
+        (
+            "PUT",
+            "/api/firewall/settings",
+            json!({ "country_open_port": "FR;id" }),
+        ),
+        (
+            "POST",
+            "/api/firewall/zones",
+            json!({
+                "zone": "ww",
+                "rule_kind": "DockerTCP",
+                "value": "443,ext,traefik$(id),443"
+            }),
+        ),
+        (
+            "POST",
+            "/api/firewall/docker-rules",
+            json!({
+                "source_container": "traefik",
+                "destination_container": "app",
+                "network_name": "ext",
+                "proto": "tcp",
+                "ports": "80;id"
+            }),
+        ),
+        (
+            "POST",
+            "/api/firewall/blocklists",
+            json!({
+                "name": "evil_bl",
+                "url": "https://example.org/$(whoami).txt"
+            }),
+        ),
+    ];
+    for (method_str, uri, body) in cases {
+        let (st, _) = response_json(
+            app.clone()
+                .oneshot(signed_request(
+                    method_str,
+                    uri,
+                    TEST_MASTER_KEY,
+                    TEST_MASTER_SECRET,
+                    Some(&body),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "expected 400 on {uri}");
+    }
 
-    let mut req2 = signed_request_with_ts("GET", "/api/settings?replay_test=1", TEST_MASTER_KEY, TEST_MASTER_SECRET, None, &replay_ts);
-    req2.extensions_mut().insert(ConnectInfo(allowed_addr));
-    // Must fail because signature has already been recorded
-    let (st2, err2) = response_json(app.clone().oneshot(req2).await.unwrap()).await;
-    assert_eq!(st2, StatusCode::UNAUTHORIZED);
-    assert!(err2["error"].as_str().unwrap().contains("already been used"));
+    let traversal_import = json!({ "source_dir": "../../etc" });
+    let (st, _) = response_json(
+        app.clone()
+            .oneshot(signed_request(
+                "POST",
+                "/api/firewall/import",
+                TEST_MASTER_KEY,
+                TEST_MASTER_SECRET,
+                Some(&traversal_import),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(st == StatusCode::BAD_REQUEST || st == StatusCode::FORBIDDEN);
+
+    let mut prod_like_state = state.clone();
+    prod_like_state.allow_private_urls = false;
+    let prod_app = create_app(prod_like_state);
+    let ssrf_bl = json!({
+        "name": "imds_probe",
+        "url": "http://169.254.169.254/latest/meta-data/"
+    });
+    let (st, _) = response_json(
+        prod_app
+            .oneshot(signed_request(
+                "POST",
+                "/api/firewall/blocklists",
+                TEST_MASTER_KEY,
+                TEST_MASTER_SECRET,
+                Some(&ssrf_bl),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}
+
+async fn assert_scoped_gets_and_r4_rbac(app: &axum::Router) {
+    let op_create = json!({
+        "name": "BL Only",
+        "can_manage_blocklists": true
+    });
+    let (st, op_body) = response_json(
+        app.clone()
+            .oneshot(signed_request(
+                "POST",
+                "/api/keys",
+                TEST_MASTER_KEY,
+                TEST_MASTER_SECRET,
+                Some(&op_create),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED);
+    let op_key = op_body["raw_key"].as_str().unwrap();
+    let op_sec = op_body["signing_secret"].as_str().unwrap();
+
+    for forbidden_get in [
+        "/api/firewall/settings",
+        "/api/firewall/zones",
+        "/api/firewall/docker-rules",
+        "/api/firewall/special-rules",
+        "/api/firewall/tools-functions",
+        "/api/firewall/preview",
+        "/api/docker/discovery",
+    ] {
+        let (st, _) = response_json(
+            app.clone()
+                .oneshot(signed_request("GET", forbidden_get, op_key, op_sec, None))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN, "expected 403 on {forbidden_get}");
+    }
+
+    let parent_create = json!({
+        "name": "Ops Parent",
+        "can_manage_keys": true,
+        "can_manage_blocklists": true,
+        "can_manage_settings": true
+    });
+    let (st, parent_body) = response_json(
+        app.clone()
+            .oneshot(signed_request(
+                "POST",
+                "/api/keys",
+                TEST_MASTER_KEY,
+                TEST_MASTER_SECRET,
+                Some(&parent_create),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED);
+    let p_key = parent_body["raw_key"].as_str().unwrap();
+    let p_sec = parent_body["signing_secret"].as_str().unwrap();
+
+    for escalated in [
+        json!({ "name": "Esc1", "can_manage_keys": true }),
+        json!({ "name": "Esc2", "can_manage_settings": true }),
+        json!({ "name": "Esc3", "can_manage_special_rules": true }),
+    ] {
+        let (st, _) = response_json(
+            app.clone()
+                .oneshot(signed_request(
+                    "POST",
+                    "/api/keys",
+                    p_key,
+                    p_sec,
+                    Some(&escalated),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN);
+    }
+
+    let ok_daughter = json!({ "name": "Safe Daughter", "can_manage_blocklists": true });
+    let (st, _) = response_json(
+        app.clone()
+            .oneshot(signed_request(
+                "POST",
+                "/api/keys",
+                p_key,
+                p_sec,
+                Some(&ok_daughter),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn security_hardening_bash_injection_ssrf_traversal_and_r4_rbac() {
+    use axum::extract::ConnectInfo;
+    use sea_orm::EntityTrait;
+    use simply_fw_rules_manager::entities::fw_settings;
+    use std::net::SocketAddr;
+
+    let (app, state) = setup_test_env().await;
+
+    assert_injection_and_ssrf_rejected(&app, &state).await;
+    assert_scoped_gets_and_r4_rbac(&app).await;
+
+    let save_key = json!({ "hook_executor_api_key": "super-secret-api-key" });
+    let (st, resp_cfg) = response_json(
+        app.clone()
+            .oneshot(signed_request(
+                "PUT",
+                "/api/firewall/settings",
+                TEST_MASTER_KEY,
+                TEST_MASTER_SECRET,
+                Some(&save_key),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(resp_cfg["has_hook_api_key"], true);
+    assert!(resp_cfg.get("hook_executor_api_key").is_none());
+
+    let db_row = fw_settings::Entity::find_by_id(1)
+        .one(&state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    let stored = db_row.hook_executor_api_key.unwrap();
+    assert!(
+        simply_fw_rules_manager::crypto::SecretCipher::is_envelope(&stored),
+        "hook_executor_api_key must be stored sealed in envelope"
+    );
+
+    let empty_save = json!({ "hook_executor_api_key": "" });
+    let (st, resp_cfg2) = response_json(
+        app.clone()
+            .oneshot(signed_request(
+                "PUT",
+                "/api/firewall/settings",
+                TEST_MASTER_KEY,
+                TEST_MASTER_SECRET,
+                Some(&empty_save),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(resp_cfg2["has_hook_api_key"], true);
+
+    let ts = Utc::now().timestamp().to_string();
+    let sig = compute_signature(TEST_MASTER_SECRET, "GET", "/api/settings", &ts, b"").unwrap();
+    let no_ci_req = Request::builder()
+        .method("GET")
+        .uri("/api/settings")
+        .header("X-API-Key", TEST_MASTER_KEY)
+        .header("X-Timestamp", ts)
+        .header("X-Signature-256", sig)
+        .body(Body::empty())
+        .unwrap();
+    assert!(
+        no_ci_req
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .is_none()
+    );
+    let (st, _) = response_json(app.oneshot(no_ci_req).await.unwrap()).await;
+    assert_eq!(st, StatusCode::INTERNAL_SERVER_ERROR);
 }

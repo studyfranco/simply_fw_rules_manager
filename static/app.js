@@ -586,7 +586,6 @@ async function renderSettingsTab() {
       <p class="text-muted text-sm" style="margin-bottom:1rem;">
         Vous pouvez enregistrer des règles pour n'importe quel conteneur Docker, même arrêté. Lors de la génération de <code>firewall.settings</code>, seules les règles dont le conteneur cible est <strong>RUNNING</strong> seront écrites dans le fichier généré.
       </p>
-      <div id="zone-rule-form-slot"></div>
       <div class="table-container">
         <table class="data-table">
           <thead>
@@ -721,11 +720,39 @@ function renderZoneRuleRow(r, canEdit) {
   </tr>`;
 }
 
+function openEditorModal(modal, title, content, cancelId) {
+  const previousFocus = document.activeElement;
+  const slot = modal.querySelector(".modal-editor");
+  const closeButton = modal.querySelector(".btn-modal-close");
+  modal.querySelector("h3").textContent = title;
+  slot.innerHTML = content;
+
+  const close = () => {
+    if (closeButton.onclick !== close) return;
+    modal.classList.add("hidden");
+    modal.onclick = null;
+    modal.onkeydown = null;
+    closeButton.onclick = null;
+    slot.replaceChildren();
+    if (previousFocus?.isConnected) previousFocus.focus();
+  };
+  closeButton.onclick = close;
+  document.getElementById(cancelId).onclick = close;
+  modal.onclick = (event) => {
+    if (event.target === modal) close();
+  };
+  modal.onkeydown = (event) => {
+    if (event.key === "Escape") close();
+  };
+  modal.classList.remove("hidden");
+  closeButton.focus();
+  return close;
+}
+
 function showZoneRuleForm(existing) {
-  const slot = document.getElementById("zone-rule-form-slot");
-  slot.innerHTML = `
-    <form id="zone-rule-editor-form" class="card" style="margin-bottom:1rem;background:#383e45;border-color:#565b63;box-shadow:var(--shadow);">
-      <h3>${existing ? "Modifier la Règle de Zone" : "Nouvelle Règle de Zone"}</h3>
+  const modal = document.getElementById("zone-rule-modal");
+  const close = openEditorModal(modal, existing ? "Modifier la Règle de Zone" : "Nouvelle Règle de Zone", `
+    <form id="zone-rule-editor-form">
       <div class="grid-2" style="margin-top:0.75rem;">
         <div class="form-group">
           <label for="zr-zone">Zone</label>
@@ -781,7 +808,7 @@ function showZoneRuleForm(existing) {
         <button type="button" id="zr-cancel" class="btn btn-secondary">Annuler</button>
       </div>
     </form>
-  `;
+  `, "zr-cancel");
 
   const updateFromHelper = () => {
     const ep = document.getElementById("zr-helper-extport").value.trim();
@@ -794,10 +821,6 @@ function showZoneRuleForm(existing) {
   };
   ["zr-helper-extport", "zr-helper-net", "zr-helper-container", "zr-helper-cport"].forEach((id) => {
     document.getElementById(id).addEventListener("input", updateFromHelper);
-  });
-
-  document.getElementById("zr-cancel").addEventListener("click", () => {
-    slot.innerHTML = "";
   });
 
   document.getElementById("zone-rule-editor-form").addEventListener("submit", async (e) => {
@@ -814,6 +837,7 @@ function showZoneRuleForm(existing) {
       if (existing) await client.put("/api/firewall/zones/" + existing.id, payload);
       else await client.post("/api/firewall/zones", payload);
       toast("Règle de zone enregistrée", "success");
+      close();
       await renderSettingsTab();
     } catch (err) {
       toast("Erreur: " + err.message, "error");
@@ -880,7 +904,6 @@ async function renderDockerTab() {
       <p class="text-muted text-sm" style="margin-bottom:1rem;">
         Format généré: <code>source;destination;network;proto;ports</code>. Lors du clic sur <strong>Générer</strong>, seules les règles dont les <strong>deux conteneurs (source ET destination) sont RUNNING</strong> sont écrites dans <code>firewall.settings</code>.
       </p>
-      <div id="docker-rule-form-slot"></div>
       <div class="table-container">
         <table class="data-table">
           <thead>
@@ -1045,10 +1068,9 @@ async function renderDockerTab() {
 }
 
 function showDockerRuleForm(existing) {
-  const slot = document.getElementById("docker-rule-form-slot");
-  slot.innerHTML = `
-    <form id="docker-rule-editor-form" class="card" style="margin-bottom:1rem;background:#383e45;border-color:#565b63;box-shadow:var(--shadow);">
-      <h3>${existing ? "Modifier le Flux Inter-Conteneurs" : "Nouveau Flux Inter-Conteneurs"}</h3>
+  const modal = document.getElementById("docker-rule-modal");
+  const close = openEditorModal(modal, existing ? "Modifier le Flux Inter-Conteneurs" : "Nouveau Flux Inter-Conteneurs", `
+    <form id="docker-rule-editor-form">
       <div class="grid-2" style="margin-top:0.75rem;">
         <div class="form-group">
           <label for="dkr-src">Conteneur Source (champ libre ou sélection)</label>
@@ -1087,11 +1109,7 @@ function showDockerRuleForm(existing) {
         <button type="button" id="dkr-cancel" class="btn btn-secondary">Annuler</button>
       </div>
     </form>
-  `;
-
-  document.getElementById("dkr-cancel").addEventListener("click", () => {
-    slot.innerHTML = "";
-  });
+  `, "dkr-cancel");
 
   document.getElementById("docker-rule-editor-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1109,6 +1127,7 @@ function showDockerRuleForm(existing) {
       if (existing) await client.put("/api/firewall/docker-rules/" + existing.id, payload);
       else await client.post("/api/firewall/docker-rules", payload);
       toast("Flux inter-conteneurs enregistré", "success");
+      close();
       await renderDockerTab();
     } catch (err) {
       toast("Erreur: " + err.message, "error");
@@ -1278,7 +1297,6 @@ async function renderBlocklistsTab() {
       <p class="text-muted text-sm" style="margin-bottom:1rem;">
         Chaque entrée active génère un appel <code>generate_list "&lt;URL&gt;" "&lt;nom&gt;" &amp;</code>. Les flux nécessitant une authentification JSON complexe (comme AbuseIPDB) sont ingérés par <code>simply_ip_sync</code> et exposés en liste brute sans authentification par <code>simply_ip_exporter</code>.
       </p>
-      <div id="blocklist-form-slot"></div>
       <div class="table-container">
         <table class="data-table">
           <thead>
@@ -1407,10 +1425,9 @@ async function renderBlocklistsTab() {
 }
 
 function showBlocklistForm(existing) {
-  const slot = document.getElementById("blocklist-form-slot");
-  slot.innerHTML = `
-    <form id="blocklist-editor-form" class="card" style="margin-bottom:1rem;background:#383e45;border-color:#565b63;box-shadow:var(--shadow);">
-      <h3>${existing ? "Modifier la Blocklist" : "Nouvelle Blocklist"}</h3>
+  const modal = document.getElementById("blocklist-modal");
+  const close = openEditorModal(modal, existing ? "Modifier la Blocklist" : "Nouvelle Blocklist", `
+    <form id="blocklist-editor-form">
       <div class="grid-2" style="margin-top:0.75rem;">
         <div class="form-group">
           <label for="bl-name">Nom de Liste (2e argument de <code>generate_list</code>)</label>
@@ -1435,11 +1452,7 @@ function showBlocklistForm(existing) {
         <button type="button" id="bl-cancel" class="btn btn-secondary">Annuler</button>
       </div>
     </form>
-  `;
-
-  document.getElementById("bl-cancel").addEventListener("click", () => {
-    slot.innerHTML = "";
-  });
+  `, "bl-cancel");
 
   document.getElementById("blocklist-editor-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1454,6 +1467,7 @@ function showBlocklistForm(existing) {
       if (existing) await client.put(`/api/firewall/blocklists/${existing.id}`, payload);
       else await client.post("/api/firewall/blocklists", payload);
       toast("Blocklist enregistrée", "success");
+      close();
       await renderBlocklistsTab();
     } catch (err) {
       toast("Erreur: " + err.message, "error");
@@ -1467,12 +1481,12 @@ function showBlocklistForm(existing) {
 
 async function renderDeployTab() {
   const panel = document.getElementById("tab-deploy");
-  const [settings, preview] = await Promise.all([
-    client.get("/api/firewall/settings"),
-    client.get("/api/firewall/preview"),
-  ]);
   const canEditSettings = me.is_master || me.can_manage_settings;
   const canDeploy = me.is_master || me.can_deploy_and_reload;
+  const [settings, preview] = await Promise.all([
+    canEditSettings ? client.get("/api/firewall/settings").catch(() => ({})) : Promise.resolve({}),
+    client.get("/api/firewall/preview"),
+  ]);
 
   panel.innerHTML = `
     <section class="card" style="margin-bottom:1.5rem;">
@@ -1489,6 +1503,7 @@ async function renderDeployTab() {
       <p class="subtitle">Générez les fichiers de configuration du pare-feu sur le disque ou déclenchez leur application à chaud via <code>simply_hook_executor</code>.</p>
     </section>
 
+    ${canEditSettings ? `
     <section class="card">
       <div class="list-header">
         <h2>Configuration Déploiement, Démon Docker &amp; <code>simply_hook_executor</code></h2>
@@ -1503,23 +1518,23 @@ async function renderDeployTab() {
         <div class="grid-2">
           <div class="form-group">
             <label for="dp-output-dir">Répertoire Cible sur Disque (<code>output_dir</code>)</label>
-            <input type="text" id="dp-output-dir" class="input-field font-mono" value="${escapeHtml(settings.output_dir)}" required>
+            <input type="text" id="dp-output-dir" class="input-field font-mono" value="${escapeHtml(settings.output_dir || preview.output_dir || "")}" required>
           </div>
           <div class="form-group">
             <label for="dp-docker-endpoint">Endpoint Démon Docker (<code>unix:///var/run/docker.sock</code> ou <code>http://...:2375</code>)</label>
-            <input type="text" id="dp-docker-endpoint" class="input-field font-mono" value="${escapeHtml(settings.docker_endpoint)}" required>
+            <input type="text" id="dp-docker-endpoint" class="input-field font-mono" value="${escapeHtml(settings.docker_endpoint || "")}" required>
           </div>
           <div class="form-group">
             <label for="dp-tools-path">Chemin de référence <code>firewall.tools</code></label>
-            <input type="text" id="dp-tools-path" class="input-field font-mono" value="${escapeHtml(settings.tools_script_path)}" required>
+            <input type="text" id="dp-tools-path" class="input-field font-mono" value="${escapeHtml(settings.tools_script_path || "")}" required>
           </div>
           <div class="form-group">
             <label for="dp-hook-url">URL de <code>simply_hook_executor</code></label>
             <input type="text" id="dp-hook-url" class="input-field font-mono" value="${escapeHtml(settings.hook_executor_url || "")}" placeholder="http://127.0.0.1:8080">
           </div>
           <div class="form-group">
-            <label for="dp-hook-key">API Key <code>simply_hook_executor</code></label>
-            <input type="text" id="dp-hook-key" class="input-field font-mono" value="${escapeHtml(settings.hook_executor_api_key || "")}" placeholder="X-API-Key...">
+            <label for="dp-hook-key">API Key <code>simply_hook_executor</code> ${settings.has_hook_api_key ? `<span class="badge badge-running">Configurée (chiffrée)</span>` : `<span class="badge badge-stopped">Non configurée</span>`}</label>
+            <input type="password" id="dp-hook-key" class="input-field font-mono" placeholder="Laisser vide pour conserver la clé actuelle">
           </div>
           <div class="form-group">
             <label for="dp-hook-secret">Signing Secret <code>simply_hook_executor</code> ${settings.has_hook_signing_secret ? `<span class="badge badge-running">Configuré (chiffré)</span>` : `<span class="badge badge-stopped">Non configuré</span>`}</label>
@@ -1527,16 +1542,27 @@ async function renderDeployTab() {
           </div>
           <div class="form-group">
             <label for="dp-hook-reload">Nom du Hook de Reload Firewall</label>
-            <input type="text" id="dp-hook-reload" class="input-field font-mono" value="${escapeHtml(settings.hook_reload_name)}" required>
+            <input type="text" id="dp-hook-reload" class="input-field font-mono" value="${escapeHtml(settings.hook_reload_name || "")}" required>
           </div>
           <div class="form-group">
             <label for="dp-hook-update">Nom du Hook de Mise à jour Conteneurs</label>
-            <input type="text" id="dp-hook-update" class="input-field font-mono" value="${escapeHtml(settings.hook_update_containers_name)}" required>
+            <input type="text" id="dp-hook-update" class="input-field font-mono" value="${escapeHtml(settings.hook_update_containers_name || "")}" required>
           </div>
         </div>
-        ${canEditSettings ? `<button type="submit" class="btn btn-primary" style="margin-top:0.75rem;">Sauvegarder la Configuration d'Exécution</button>` : ""}
+        <button type="submit" class="btn btn-primary" style="margin-top:0.75rem;">Sauvegarder la Configuration d'Exécution</button>
       </form>
     </section>
+    ` : (canDeploy ? `
+    <section class="card">
+      <div class="list-header">
+        <h2>Actions Complémentaires</h2>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <button type="button" id="btn-deploy-import" class="btn btn-secondary btn-sm">Importer /example</button>
+          <button type="button" id="btn-deploy-update-containers" class="btn btn-secondary btn-sm">Hook: Mettre à jour les Conteneurs</button>
+        </div>
+      </div>
+    </section>
+    ` : "")}
 
     <section class="card" style="margin-top:1.5rem;">
       <div class="list-header">
@@ -1569,10 +1595,11 @@ async function renderDeployTab() {
         docker_endpoint: document.getElementById("dp-docker-endpoint").value.trim(),
         tools_script_path: document.getElementById("dp-tools-path").value.trim(),
         hook_executor_url: document.getElementById("dp-hook-url").value.trim(),
-        hook_executor_api_key: document.getElementById("dp-hook-key").value.trim(),
         hook_reload_name: document.getElementById("dp-hook-reload").value.trim(),
         hook_update_containers_name: document.getElementById("dp-hook-update").value.trim(),
       };
+      const keyVal = document.getElementById("dp-hook-key").value.trim();
+      if (keyVal) payload.hook_executor_api_key = keyVal;
       const secretVal = document.getElementById("dp-hook-secret").value.trim();
       if (secretVal) payload.hook_executor_signing_secret = secretVal;
       try {
@@ -1677,7 +1704,6 @@ async function renderKeysTab() {
         ${canManage ? `<button type="button" class="btn btn-primary" id="new-key-btn">+ New Key</button>` : ""}
       </div>
       <div id="key-credentials-banner"></div>
-      <div id="key-form-slot"></div>
       <div class="table-container">
         <table class="data-table">
           <thead>

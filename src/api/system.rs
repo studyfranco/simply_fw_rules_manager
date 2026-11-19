@@ -8,8 +8,8 @@ use axum::response::IntoResponse;
 use sea_orm::{EntityTrait, PaginatorTrait};
 use serde::Serialize;
 
-use crate::entities::prelude::*;
 use crate::entities::api_key;
+use crate::entities::prelude::*;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -61,15 +61,9 @@ pub async fn get_system_settings(
     let audit_log_count = AuditLog::find().count(&state.db).await?;
 
     Ok(Json(SystemSettingsResponse {
-        trusted_proxies: state
-            .trusted_proxies
-            .networks()
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
+        trusted_proxies: state.trusted_proxies.matchers_display(),
         encryption_enabled: state.cipher.is_encrypting(),
-        output_dir: std::env::var("FW_OUTPUT_DIR")
-            .unwrap_or_else(|_| "/etc/firewall".to_owned()),
+        output_dir: std::env::var("FW_OUTPUT_DIR").unwrap_or_else(|_| "/etc/firewall".to_owned()),
         hook_executor_url: std::env::var("HOOK_EXECUTOR_URL").ok(),
         zone_rules_count,
         docker_rules_count,

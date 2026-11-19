@@ -155,12 +155,24 @@ impl MigrationTrait for Migration {
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let indexes = [
             ("idx_audit_logs_timestamp", AuditLogs::Table.into_iden()),
-            ("idx_audit_logs_action_timestamp", AuditLogs::Table.into_iden()),
+            (
+                "idx_audit_logs_action_timestamp",
+                AuditLogs::Table.into_iden(),
+            ),
             ("idx_audit_logs_api_key_id", AuditLogs::Table.into_iden()),
             ("idx_fw_zone_rules_zone", FwZoneRules::Table.into_iden()),
-            ("idx_fw_zone_rules_container_name", FwZoneRules::Table.into_iden()),
-            ("idx_fw_docker_inter_rules_source", FwDockerInterRules::Table.into_iden()),
-            ("idx_fw_docker_inter_rules_dest", FwDockerInterRules::Table.into_iden()),
+            (
+                "idx_fw_zone_rules_container_name",
+                FwZoneRules::Table.into_iden(),
+            ),
+            (
+                "idx_fw_docker_inter_rules_source",
+                FwDockerInterRules::Table.into_iden(),
+            ),
+            (
+                "idx_fw_docker_inter_rules_dest",
+                FwDockerInterRules::Table.into_iden(),
+            ),
             ("idx_fw_blocklists_enabled", FwBlocklists::Table.into_iden()),
             ("idx_api_keys_parent_key_id", ApiKeys::Table.into_iden()),
             ("idx_api_keys_prefix", ApiKeys::Table.into_iden()),

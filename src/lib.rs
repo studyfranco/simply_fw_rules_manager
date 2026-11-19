@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! `simply_fw_rules_manager` — Linux Netfilter/ipset & Docker firewall rule manager.
 
 pub mod api;
@@ -11,6 +12,7 @@ pub mod extract;
 pub mod generator;
 pub mod hook_client;
 pub mod importer;
+pub mod input_validation;
 pub mod master;
 pub mod middleware;
 pub mod migration;
@@ -26,9 +28,8 @@ use tower_http::trace::TraceLayer;
 
 use crate::state::AppState;
 
-/// Assembles the full Axum router with `CANONICAL_V1` authentication middleware and static asset serving.
-pub fn create_app(state: AppState) -> Router {
-    let api_routes = Router::new()
+fn build_api_routes(state: AppState) -> Router<AppState> {
+    Router::new()
         .route("/auth/me", get(api::keys::get_me))
         .route(
             "/keys",
@@ -116,9 +117,14 @@ pub fn create_app(state: AppState) -> Router {
             post(api::deploy::update_containers),
         )
         .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
+            state,
             middleware::auth_middleware,
-        ));
+        ))
+}
+
+/// Assembles the full Axum router with `CANONICAL_V1` authentication middleware and static asset serving.
+pub fn create_app(state: AppState) -> Router {
+    let api_routes = build_api_routes(state.clone());
 
     Router::new()
         .route("/health", get(api::health_check))

@@ -6,7 +6,7 @@ use std::time::Duration;
 use sea_orm::sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
 };
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement};
 
 /// `SQLite` permits a single writer connection to avoid DDL/transaction races.
 pub const SQLITE_MAX_CONNECTIONS: u32 = 1;
@@ -19,8 +19,8 @@ pub const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
 /// # Errors
 /// Returns [`DbErr`] if the connection or pool initialization fails.
 pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
-    if let Some(sqlite_url) = database_url.strip_prefix("sqlite://") {
-        let connect_options = SqliteConnectOptions::from_str(&format!("sqlite://{sqlite_url}"))
+    if database_url.starts_with("sqlite:") {
+        let connect_options = SqliteConnectOptions::from_str(database_url)
             .map_err(|e| DbErr::Custom(format!("invalid DATABASE_URL: {e}")))?
             .create_if_missing(true)
             .foreign_keys(true)
@@ -41,49 +41,6 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
     sea_orm::Database::connect(database_url).await
 }
 
-/// Re-applies `SQLite` session pragmas and logs the active journal mode.
-pub async fn apply_sqlite_pragmas(db: &DatabaseConnection) {
-    if db.get_database_backend() != DatabaseBackend::Sqlite {
-        return;
-    }
-    let statements = [
-        "PRAGMA foreign_keys = ON",
-        "PRAGMA synchronous = NORMAL",
-        &format!("PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}"),
-        "PRAGMA temp_store = MEMORY",
-        "PRAGMA cache_size = -64000",
-        "PRAGMA mmap_size = 268435456",
-        "PRAGMA analysis_limit = 1000",
-    ];
-    for stmt in statements {
-        if let Err(e) = db
-            .execute_raw(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                stmt.to_owned(),
-            ))
-            .await
-        {
-            tracing::warn!("failed to (re)apply session pragma '{stmt}': {e}");
-        }
-    }
-}
-
-/// Refreshes `SQLite` query planner statistics (`PRAGMA optimize`).
-///
-/// # Errors
-/// Returns [`DbErr`] if the pragma execution fails.
-pub async fn run_sqlite_optimize(db: &DatabaseConnection) -> Result<(), DbErr> {
-    if db.get_database_backend() != DatabaseBackend::Sqlite {
-        return Ok(());
-    }
-    db.execute_raw(Statement::from_string(
-        DatabaseBackend::Sqlite,
-        "PRAGMA analysis_limit = 1000; PRAGMA optimize;".to_owned(),
-    ))
-    .await?;
-    Ok(())
-}
-
 /// Runs all pending database migrations.
 ///
 /// # Errors
@@ -91,6 +48,16 @@ pub async fn run_sqlite_optimize(db: &DatabaseConnection) -> Result<(), DbErr> {
 pub async fn run_migrations(db: &DatabaseConnection) -> Result<(), DbErr> {
     use sea_orm_migration::MigratorTrait;
     crate::migration::Migrator::up(db, None).await
+}
+
+/// Checks whether an index named `index` exists on `table` via backend catalog queries.
+///
+/// # Errors
+/// Returns [`DbErr`] if the backend catalog query fails or the backend is unsupported.
+pub async fn has_index(db: &DatabaseConnection, table: &str, index: &str) -> Result<bool, DbErr> {
+    sea_orm_migration::SchemaManager::new(db)
+        .has_index(table, index)
+        .await
 }
 
 /// Executes a lightweight health query (`SELECT 1`) for readiness probes.

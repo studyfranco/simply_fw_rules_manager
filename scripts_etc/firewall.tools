@@ -333,12 +333,18 @@ vault_signed_call()
 	local ts sig resp_raw rc http_code resp_body
 
 	ts=$(date -u +%s)
-	# CANONICAL_V1: sauts de ligne réels entre les 4 champs, aucun à la fin.
-	sig=$(printf '%s\n%s\n%s\n%s' "${method}" "${path%%\?*}" "${ts}" "${body}" \
-		| openssl dgst -sha256 -hmac "${secret}" | sed 's/^.*= //')
+	# CANONICAL_V1: sauts de ligne réels entre les 4 champs, aucun à la fin; conserve la query string complète (${path}).
+	# Le secret HMAC transite uniquement via variable d'environnement (_FW_HMAC_SECRET), jamais en argument argv.
+	if command -v python3 >/dev/null 2>&1; then
+		sig=$(printf '%s\n%s\n%s\n%s' "${method}" "${path}" "${ts}" "${body}" \
+			| _FW_HMAC_SECRET="${secret}" python3 -c 'import hashlib,hmac,os,sys;print(hmac.new(os.environ["_FW_HMAC_SECRET"].encode("utf-8"),sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')
+	else
+		echo "vault_signed_call: python3 is required for non-argv HMAC signing" >&2
+		return 1
+	fi
 	resp_raw=$(curl --retry "${retries}" --retry-delay 1 --retry-connrefused --max-time "${max_time}" \
 		-sS -w $'\n%{http_code}' -X "${method}" \
-		-H "X-API-Key: ${api_key}" \
+		-K <(printf 'header = "X-API-Key: %s"\n' "${api_key}") \
 		-H "X-Timestamp: ${ts}" \
 		-H "X-Signature-256: sha256=${sig}" \
 		${body:+-H "Content-Type: application/json" -d "${body}"} \
@@ -833,6 +839,23 @@ insert_crowdsec6_list_rules()
 	return 0
 }
 
+## @fn _init_active_lists_dir
+## @usage _init_active_lists_dir
+## @desc Initialise un répertoire temporaire sécurisé (0700 sous /run/firewall ou mktemp -d) partagé entre les téléchargements en arrière-plan et finalize_blocklists.
+_init_active_lists_dir()
+{
+	if [ -n "${_FW_ACTIVE_LISTS_DIR:-}" ] && [ -d "${_FW_ACTIVE_LISTS_DIR}" ]; then
+		return 0
+	fi
+	if mkdir -m 0700 -p "/run/firewall" 2>/dev/null && [ -w "/run/firewall" ]; then
+		_FW_ACTIVE_LISTS_DIR=$(mktemp -d "/run/firewall/active_lists.XXXXXX")
+	else
+		_FW_ACTIVE_LISTS_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fw_active_lists.XXXXXX")
+	fi
+	chmod 0700 "${_FW_ACTIVE_LISTS_DIR}" 2>/dev/null || true
+	export _FW_ACTIVE_LISTS_DIR
+}
+
 ## @fn _fetch_split_ip_list
 ## @usage _fetch_split_ip_list "<url>" "<marker_name>" "<file_prefix>" "<empty_removes_existing:0|1>"
 ## @desc Helper interne: télécharge une liste d'IPs/CIDRs, sépare IPv4/IPv6 et gère la mise à jour atomique.
@@ -850,8 +873,16 @@ _fetch_split_ip_list()
 	local final_4="${fw_dir}/${file_prefix}.4"
 	local final_6="${fw_dir}/${file_prefix}.6"
 
-	mkdir -p "/tmp/fw_active_lists_$$" 2>/dev/null
-	: > "/tmp/fw_active_lists_$$/${marker_name}"
+	local active_dir="${_FW_ACTIVE_LISTS_DIR:-}"
+	if [ -z "${active_dir}" ]; then
+		if mkdir -m 0700 -p "/run/firewall" 2>/dev/null && [ -w "/run/firewall" ]; then
+			active_dir="/run/firewall/active_lists_$$"
+		else
+			active_dir="${fw_dir}/.active_lists_$$"
+		fi
+		mkdir -m 0700 -p "${active_dir}" 2>/dev/null
+	fi
+	: > "${active_dir}/${marker_name}"
 
 	if ! curl --max-time 60 --retry 2 --retry-delay 2 -fsSL "${URL}" -o "${tmp_raw}" 2>/dev/null; then
 		rm -f "${tmp_raw}" "${tmp_4}" "${tmp_6}"
@@ -923,8 +954,16 @@ finalize_blocklists()
 {
 	wait
 	local fw_dir="${FW_DIR:-/etc/firewall}"
-	local active_dir="/tmp/fw_active_lists_$$"
-	mkdir -p "${active_dir}" 2>/dev/null
+	local active_dir="${_FW_ACTIVE_LISTS_DIR:-}"
+	if [ -z "${active_dir}" ]; then
+		if [ -d "/run/firewall/active_lists_$$" ]; then
+			active_dir="/run/firewall/active_lists_$$"
+		elif [ -d "${fw_dir}/.active_lists_$$" ]; then
+			active_dir="${fw_dir}/.active_lists_$$"
+		else
+			active_dir=$(mktemp -d "${TMPDIR:-/tmp}/fw_active_lists.XXXXXX")
+		fi
+	fi
 
 	local f base s
 	declare -A custom_wsets=()
@@ -981,6 +1020,7 @@ finalize_blocklists()
 		has_white_active=1
 	fi
 	rm -rf "${active_dir}"
+	unset _FW_ACTIVE_LISTS_DIR
 
 	cat "${fw_dir}"/*.ip.4 > "${fw_dir}/to_block.ipv4" 2>/dev/null || : > "${fw_dir}/to_block.ipv4"
 	cat "${fw_dir}"/*.ip.6 > "${fw_dir}/to_block.ipv6" 2>/dev/null || : > "${fw_dir}/to_block.ipv6"

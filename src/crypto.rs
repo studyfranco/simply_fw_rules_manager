@@ -92,9 +92,7 @@ pub fn verify_signature(
     body: &[u8],
     provided: &str,
 ) -> Option<Vec<u8>> {
-    let raw_hex = provided
-        .trim()
-        .strip_prefix(SIGNATURE_PREFIX)?;
+    let raw_hex = provided.trim().strip_prefix(SIGNATURE_PREFIX)?;
     let provided_bytes = hex::decode(raw_hex).ok()?;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
     mac.update(&canonical_v1_payload(method, target, timestamp, body));
@@ -137,6 +135,12 @@ impl SecretCipher {
         let key = chacha20poly1305::Key::try_from(bytes.as_slice())
             .map_err(|_| CryptoError::InvalidKey)?;
         Ok(Self::Sealed(Box::new(XChaCha20Poly1305::new(&key))))
+    }
+
+    /// Returns `true` when `stored` carries a recognised encryption or plaintext envelope prefix.
+    #[must_use]
+    pub fn is_envelope(stored: &str) -> bool {
+        stored.starts_with(PLAINTEXT_PREFIX) || stored.starts_with(SEALED_PREFIX)
     }
 
     /// True when this cipher encrypts with XChaCha20-Poly1305.

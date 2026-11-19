@@ -68,14 +68,23 @@ pub struct AuditLogQuery {
 /// Serialized audit log entry returned by `GET /api/audit`.
 #[derive(Debug, Serialize)]
 pub struct AuditLogResponse {
+    /// Unique audit entry identifier.
     pub id: Uuid,
+    /// ID of the acting API key, if still present.
     pub api_key_id: Option<Uuid>,
+    /// Display name of the acting API key at event time.
     pub api_key_name: String,
+    /// 8-character prefix of the acting API key.
     pub api_key_prefix: String,
+    /// Action verb recorded by the service.
     pub action: String,
+    /// Optional target resource identifier.
     pub target_resource: Option<String>,
+    /// Optional supplementary details.
     pub details: Option<String>,
+    /// Resolved client IP address.
     pub client_ip: String,
+    /// UTC timestamp when the action was logged.
     pub timestamp: DateTime<Utc>,
 }
 
@@ -110,7 +119,7 @@ pub async fn list_audit_logs(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        select = select.filter(audit_log::Column::ClientIp.eq(ip));
+        select = select.filter(audit_log::Column::ClientIp.contains(ip));
     }
     if let Some(key_filter) = query
         .api_key
@@ -119,8 +128,8 @@ pub async fn list_audit_logs(
         .filter(|s| !s.is_empty())
     {
         let mut cond = Condition::any()
-            .add(audit_log::Column::ApiKeyName.eq(key_filter))
-            .add(audit_log::Column::ApiKeyPrefix.eq(key_filter));
+            .add(audit_log::Column::ApiKeyName.contains(key_filter))
+            .add(audit_log::Column::ApiKeyPrefix.contains(key_filter));
         if let Ok(uuid) = key_filter.parse::<Uuid>() {
             cond = cond.add(audit_log::Column::ApiKeyId.eq(uuid));
         }

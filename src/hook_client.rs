@@ -49,6 +49,14 @@ pub async fn trigger_hook(
             AppError::InvalidInput(
                 "simply_hook_executor API Key is not configured in Firewall Settings".to_owned(),
             )
+        })
+        .and_then(|stored| {
+            if SecretCipher::is_envelope(stored) {
+                cipher.open(stored).map_err(AppError::from)
+            } else {
+                // Backward compatibility for legacy plaintext values before sealing was introduced.
+                Ok(stored.to_owned())
+            }
         })?;
 
     let signing_secret = settings

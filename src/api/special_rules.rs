@@ -21,7 +21,7 @@ use crate::validator::{
 };
 
 fn ensure_can_manage_special_rules(caller: &api_key::Model) -> Result<(), AppError> {
-    if caller.is_master || caller.can_manage_special_rules {
+    if caller.is_master || caller.can_manage_special_rules.is_granted() {
         Ok(())
     } else {
         Err(AppError::Forbidden(
@@ -33,11 +33,17 @@ fn ensure_can_manage_special_rules(caller: &api_key::Model) -> Result<(), AppErr
 /// Response returned by `GET /api/firewall/special-rules`.
 #[derive(Debug, Serialize)]
 pub struct SpecialRulesResponse {
+    /// Raw Bash script content for `firewall.rules.special`.
     pub script_content: String,
+    /// Whether the most recent 3-stage validation succeeded.
     pub last_validation_ok: bool,
+    /// Full 3-stage validation report (`bash -n`, `shellcheck`, variable check).
     pub validation: ValidationReport,
+    /// Parsed helper functions from `firewall.tools`.
     pub tools_functions: Vec<ToolFunctionDoc>,
+    /// Variable identifiers known to `firewall.tools` and `firewall.settings`.
     pub known_variables: Vec<String>,
+    /// Timestamp of the last update.
     pub updated_at: DateTime<Utc>,
 }
 
@@ -45,6 +51,7 @@ pub struct SpecialRulesResponse {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpecialRulesRequest {
+    /// Bash script content to validate and/or store.
     pub script_content: String,
     /// When `true`, allows saving a script that passes `bash -n` and variable resolution even if
     /// `shellcheck` reported style/error diagnostics.
@@ -68,10 +75,12 @@ async fn resolve_tools_path(state: &AppState) -> String {
 /// its live 3-stage validation report, and the parsed `firewall.tools` helper reference.
 ///
 /// # Errors
-/// Returns [`AppError`] if the database lookup fails.
+/// Returns [`AppError`] if the caller lacks permissions or the database lookup fails.
 pub async fn get_special_rules(
     State(state): State<AppState>,
+    Extension(caller): Extension<api_key::Model>,
 ) -> Result<Json<SpecialRulesResponse>, AppError> {
+    ensure_can_manage_special_rules(&caller)?;
     let tools_path_str = resolve_tools_path(&state).await;
     let tools_path = Path::new(&tools_path_str);
 
@@ -97,21 +106,29 @@ pub async fn get_special_rules(
 }
 
 /// `GET /api/firewall/tools-functions` — Return the parsed `firewall.tools` helper functions.
-pub async fn list_tools_functions(State(state): State<AppState>) -> Json<Vec<ToolFunctionDoc>> {
+///
+/// # Errors
+/// Returns [`AppError`] if the caller lacks `can_manage_special_rules`.
+pub async fn list_tools_functions(
+    State(state): State<AppState>,
+    Extension(caller): Extension<api_key::Model>,
+) -> Result<Json<Vec<ToolFunctionDoc>>, AppError> {
+    ensure_can_manage_special_rules(&caller)?;
     let tools_path_str = resolve_tools_path(&state).await;
-    Json(parse_tools_functions(Path::new(&tools_path_str)))
+    Ok(Json(parse_tools_functions(Path::new(&tools_path_str))))
 }
 
 /// `POST /api/firewall/special-rules/validate` — Run the 3-stage validation pipeline without saving.
 ///
 /// # Errors
-/// Returns [`AppError`] if recording the audit log fails.
+/// Returns [`AppError`] if the caller lacks permissions or recording the audit log fails.
 pub async fn validate_special_rules_endpoint(
     State(state): State<AppState>,
     Extension(caller): Extension<api_key::Model>,
     Extension(client_ip): Extension<ClientIp>,
     StrictJson(payload): StrictJson<SpecialRulesRequest>,
 ) -> Result<Json<ValidationReport>, AppError> {
+    ensure_can_manage_special_rules(&caller)?;
     let tools_path_str = resolve_tools_path(&state).await;
     let report = validate_special_rules(&payload.script_content, Path::new(&tools_path_str));
 
@@ -124,9 +141,9 @@ pub async fn validate_special_rules_endpoint(
         Some(format!(
             "3-stage check: valid={}, bash_n={}, undefined_vars={}, shellcheck_ok={}",
             report.valid,
-            report.bash_n_ok,
+            report.bash_n_ok.is_passed(),
             report.undefined_variables.len(),
-            report.shellcheck_ok
+            report.shellcheck_ok.is_passed()
         )),
     )
     .await?;
@@ -153,8 +170,9 @@ pub async fn update_special_rules(
     let tools_path = Path::new(&tools_path_str);
     let report = validate_special_rules(&payload.script_content, tools_path);
 
-    let acceptable =
-        report.bash_n_ok && report.variables_ok && (report.shellcheck_ok || payload.allow_warnings);
+    let acceptable = report.bash_n_ok.is_passed()
+        && report.variables_ok.is_passed()
+        && (report.shellcheck_ok.is_passed() || payload.allow_warnings);
 
     if !acceptable {
         record_audit(
@@ -165,9 +183,9 @@ pub async fn update_special_rules(
             Some("fw_special_rules:1".to_owned()),
             Some(format!(
                 "Rejected save: bash_n_ok={}, undefined_vars={}, shellcheck_ok={}",
-                report.bash_n_ok,
+                report.bash_n_ok.is_passed(),
                 report.undefined_variables.len(),
-                report.shellcheck_ok
+                report.shellcheck_ok.is_passed()
             )),
         )
         .await?;

@@ -58,7 +58,7 @@ pub struct ReplayGuard {
 
 impl Default for ReplayGuard {
     fn default() -> Self {
-        Self::new(crate::crypto::MAX_TIMESTAMP_SKEW_SECS)
+        Self::new(crate::crypto::MAX_TIMESTAMP_SKEW_SECS.saturating_mul(2))
     }
 }
 
@@ -66,7 +66,8 @@ impl ReplayGuard {
     /// Builds a guard remembering signatures for `window_seconds`.
     #[must_use]
     pub fn new(window_seconds: i64) -> Self {
-        let window = Duration::from_secs(window_seconds.clamp(1, 3600) as u64);
+        let clamped = u64::try_from(window_seconds.clamp(1, 3600)).unwrap_or(600);
+        let window = Duration::from_secs(clamped);
         let prune_interval = window / PRUNE_INTERVAL_DIVISOR;
         let capacity_backoff = window / CAPACITY_BACKOFF_DIVISOR;
         let now = Instant::now();
@@ -123,12 +124,14 @@ impl ReplayGuard {
 
     #[cfg(test)]
     fn tracked(&self) -> usize {
-        self.seen.lock().map(|seen| seen.len()).unwrap_or(0)
+        self.seen.lock().map_or(0, |seen| seen.len())
     }
 
     fn prune_if_due(&self, now: Instant) {
-        let over_capacity =
-            self.seen.lock().is_ok_and(|seen| seen.len() >= MAX_TRACKED_SIGNATURES);
+        let over_capacity = self
+            .seen
+            .lock()
+            .is_ok_and(|seen| seen.len() >= MAX_TRACKED_SIGNATURES);
 
         {
             let Ok(mut schedule) = self.schedule.lock() else {
