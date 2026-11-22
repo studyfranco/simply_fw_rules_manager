@@ -26,3 +26,7 @@ A reverse proxy can reach an opted-in backend over `ext` or forward through a ho
 ## Documentation data
 
 Use synthetic data throughout examples, fixtures, and onboarding. Keep production hostnames, IP addresses, credentials, tokens, and customer data out of the repository. Use RFC 2606 domains such as `fw.example.test`, RFC 5737 IPv4 addresses such as `192.0.2.10`, `198.51.100.10`, and `203.0.113.10`, and IPv6 addresses from RFC 3849 (`2001:db8::/32`). The two Ansible IPv4 bridge CIDRs above may be documented as internal deployment defaults.
+
+## Agent skill
+
+- [Use `simply_fw_rules_manager`](.agents/skills/use-fw-rules-manager/SKILL.md): Operational cookbook for `CANONICAL_V1` API calls, `OriginalUri` signing, `isolate` network boundaries, firewall rule/feed management, and Ansible deployment.

@@ -267,7 +267,7 @@ All endpoints under `/api/*` require canonical request signing:
 
 ### Route Catalogue
 
-For full payload contracts and error models, see [`API_REFERENCE.md`](API_REFERENCE.md) and [`RBAC_MODEL.md`](RBAC_MODEL.md).
+For full payload contracts and error models, see [`API_REFERENCE.md`](API_REFERENCE.md), [`RBAC_MODEL.md`](RBAC_MODEL.md), and the [agent skill](.agents/skills/use-fw-rules-manager/SKILL.md).
 
 | Category | Method & Path | Scope Required | Description |
 | :--- | :--- | :--- | :--- |

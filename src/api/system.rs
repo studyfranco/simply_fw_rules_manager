@@ -9,7 +9,9 @@ use sea_orm::{EntityTrait, PaginatorTrait};
 use serde::Serialize;
 
 use crate::entities::api_key;
-use crate::entities::prelude::*;
+use crate::entities::prelude::{
+    ApiKey, AuditLog, FwBlocklist, FwDockerInterRule, FwSpecialRules, FwZoneRule,
+};
 use crate::error::AppError;
 use crate::state::AppState;
 

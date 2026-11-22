@@ -1712,21 +1712,45 @@
           fi
         fi
 
-        # Register standard REGEX_LINE feeds for this group
+        # Register or reconcile feeds for this group (REGEX_LINE and JSON_PATH)
         while IFS= read -r fd; do
           F_NAME=$(printf '%s' "$fd" | jq -r '.name')
           F_URL=$(printf '%s' "$fd" | jq -r '.source_url')
           F_TYPE=$(printf '%s' "$fd" | jq -r '.parser_type')
+          F_CFG=$(printf '%s' "$fd" | jq -r '.parser_config // .parser_config_json // empty')
 
-          HAS_FEED=$(printf '%s' "$EXISTING_FEEDS" | jq -r --arg fn "$F_NAME" '.[] | select(.name == $fn) | .id' | head -n1)
-          if [ -z "$HAS_FEED" ] || [ "$HAS_FEED" = "null" ]; then
-            F_BODY=$(jq -nc \
-              --arg name "$F_NAME" \
-              --arg url "$F_URL" \
-              --arg pt "$F_TYPE" \
-              '{name: $name, source_url: $url, parser_type: $pt}')
+          EXISTING_FEED=$(printf '%s' "$EXISTING_FEEDS" | jq -c --arg fn "$F_NAME" '.[] | select(.name == $fn)' | head -n1)
+          if [ -z "$EXISTING_FEED" ]; then
+            if [ -n "$F_CFG" ]; then
+              F_BODY=$(jq -nc \
+                --arg name "$F_NAME" \
+                --arg url "$F_URL" \
+                --arg pt "$F_TYPE" \
+                --arg cfg "$F_CFG" \
+                '{name: $name, source_url: $url, parser_type: $pt, parser_config_json: $cfg}')
+            else
+              F_BODY=$(jq -nc \
+                --arg name "$F_NAME" \
+                --arg url "$F_URL" \
+                --arg pt "$F_TYPE" \
+                '{name: $name, source_url: $url, parser_type: $pt}')
+            fi
             sync_call POST "/api/destination-groups/${G_ID}/feeds" "$F_BODY" >/dev/null
             CHANGED=true
+          else
+            F_ID=$(printf '%s' "$EXISTING_FEED" | jq -r '.id')
+            F_DIFF=$(printf '%s' "$EXISTING_FEED" | jq -r \
+              --arg url "$F_URL" --arg pt "$F_TYPE" --arg cfg "$F_CFG" \
+              '(.source_url != $url or .parser_type != $pt or (.parser_config_json // "") != $cfg)')
+            if [ "$F_DIFF" = "true" ]; then
+              F_UPD=$(jq -nc \
+                --arg url "$F_URL" \
+                --arg pt "$F_TYPE" \
+                --arg cfg "$F_CFG" \
+                'if $cfg == "" then {source_url: $url, parser_type: $pt, parser_config_json: null} else {source_url: $url, parser_type: $pt, parser_config_json: $cfg} end')
+              sync_call PATCH "/api/destination-groups/${G_ID}/feeds/${F_ID}" "$F_UPD" >/dev/null
+              CHANGED=true
+            fi
           fi
         done < <(printf '%s' "$grp" | jq -c '.feeds[]')
 

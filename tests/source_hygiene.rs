@@ -236,7 +236,12 @@ fn manifest_policy(source: &str) -> Vec<String> {
 #[test]
 fn cargo_manifest_enforces_ecosystem_policy() {
     let violations = manifest_policy(&read("Cargo.toml"));
-    assert!(violations.is_empty(), "{}", violations.join("\n"));
+    assert_eq!(
+        violations,
+        Vec::<String>::new(),
+        "{}",
+        violations.join("\n")
+    );
 }
 
 #[test]
@@ -257,7 +262,7 @@ fn manifest_policy_rejects_drift() {
         sea-schema = { default-features = false, features = ['sqlx-postgres', 'sqlx-sqlite', 'sqlx-mysql'] }
         time = { features = ["serde"] }
     "#;
-    assert!(manifest_policy(manifest).is_empty());
+    assert_eq!(manifest_policy(manifest), Vec::<String>::new());
     for (before, after, diagnostic) in [
         ("'2024'", "'2021'", "package.edition"),
         (
@@ -589,8 +594,9 @@ fn rust_sources_do_not_suppress_clippy_lints() {
     for path in rust_files("src").chain(rust_files("tests")) {
         let source = read(path.to_str().expect("UTF-8 path"));
         let violations = clippy_attribute_violations(&rust_source(&source));
-        assert!(
-            violations.is_empty(),
+        assert_eq!(
+            violations,
+            Vec::<usize>::new(),
             "{}: forbidden Clippy attributes at byte offsets {violations:?}",
             path.display()
         );
@@ -606,7 +612,10 @@ fn clippy_policy_rejects_suppressions_outside_the_entity_exception() {
         "struct_excessive_bools, reason = \"matches schema\")]\n",
         "pub struct Model { a: bool, b: bool, c: bool, d: bool }",
     );
-    assert!(clippy_attribute_violations(&rust_source(permitted)).is_empty());
+    assert_eq!(
+        clippy_attribute_violations(&rust_source(permitted)),
+        Vec::<usize>::new()
+    );
     for source in [
         concat!("#[", "allow(clippy::", "all)] fn f() {}").to_owned(),
         concat!("#![", "allow(clippy::", "all)]").to_owned(),
@@ -618,8 +627,9 @@ fn clippy_policy_rejects_suppressions_outside_the_entity_exception() {
         permitted.replace("d: bool", "d: u8"),
         permitted.replace(", reason = \"matches schema\"", ""),
     ] {
-        assert!(
-            !clippy_attribute_violations(&rust_source(&source)).is_empty(),
+        assert_ne!(
+            clippy_attribute_violations(&rust_source(&source)),
+            Vec::<usize>::new(),
             "{source}"
         );
     }
@@ -646,8 +656,9 @@ fn rust_production_code_is_panic_free_and_safe() {
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
             .unwrap_or(rust.code.len());
         let violations = production_code_violations(&rust.code[..end]);
-        assert!(
-            violations.is_empty(),
+        assert_eq!(
+            violations,
+            Vec::<&str>::new(),
             "{}: forbidden Rust constructs {violations:?}",
             path.display()
         );
@@ -685,7 +696,10 @@ fn production_check_rejects_panics_and_unsafe_code() {
         " { } \"#\"##;\n",
         "let character = '\"'; let label = 'x';",
     );
-    assert!(production_code_violations(&rust_source(ignored).code).is_empty());
+    assert_eq!(
+        production_code_violations(&rust_source(ignored).code),
+        Vec::<&str>::new()
+    );
 }
 
 const RAW_SQL_MARKERS: &str = concat!(
@@ -758,8 +772,9 @@ fn production_uses_typed_queries_outside_the_readiness_probe() {
         }
         let rust = rust_source(&source);
         let violations = raw_sql_violations(&rust, rust.code.len());
-        assert!(
-            violations.is_empty(),
+        assert_eq!(
+            violations,
+            Vec::<&str>::new(),
             "{}: raw SQL {violations:?}",
             path.display()
         );
@@ -793,7 +808,10 @@ fn raw_sql_check_rejects_raw_apis_and_dml_literals() {
         " * FROM records\n\"Statement::",
         "from_string\""
     );
-    assert!(raw_sql_violations(&rust_source(source), source.len()).is_empty());
+    assert_eq!(
+        raw_sql_violations(&rust_source(source), source.len()),
+        Vec::<&str>::new()
+    );
 }
 
 fn syntax_errors(relative: &str, source: &str) -> Vec<String> {
@@ -829,7 +847,7 @@ fn dashboard_assets_exist() {
 #[test]
 fn app_js_parses_without_syntax_errors() {
     let errors = syntax_errors("static/app.js", &read("static/app.js"));
-    assert!(errors.is_empty(), "{}", errors.join("\n"));
+    assert_eq!(errors, Vec::<String>::new(), "{}", errors.join("\n"));
 }
 
 #[test]
@@ -954,8 +972,9 @@ fn root_relative_fetches(source: &str) -> Vec<&str> {
 fn every_fetch_goes_through_the_mount_prefix_aware_request_base() {
     let js = read("static/app.js");
     let violations = root_relative_fetches(&js);
-    assert!(
-        violations.is_empty(),
+    assert_eq!(
+        violations,
+        Vec::<&str>::new(),
         "root-relative fetch calls: {violations:?}"
     );
     let tokens = js_tokens(&js);
@@ -964,8 +983,9 @@ fn every_fetch_goes_through_the_mount_prefix_aware_request_base() {
         .enumerate()
         .filter(|(_, pair)| *pair == ["fetch", "("])
         .collect();
-    assert!(
-        !fetches.is_empty(),
+    assert_ne!(
+        fetches,
+        Vec::new(),
         "app.js must issue requests through fetch"
     );
     for (index, _) in fetches {
@@ -1166,8 +1186,9 @@ fn key_payload_violations(js: &str) -> Vec<&str> {
 fn the_dashboard_never_sends_is_master_in_a_key_payload() {
     let js = read("static/app.js");
     let violations = key_payload_violations(&js);
-    assert!(
-        violations.is_empty(),
+    assert_eq!(
+        violations,
+        Vec::<&str>::new(),
         "is_master sent in key payloads: {violations:?}"
     );
 }
@@ -1277,8 +1298,9 @@ fn frontend_has_no_external_assets_or_svg_data_uris() {
         {
             let source = read(path.to_str().expect("UTF-8 path"));
             let violations = external_asset_violations(&source, extension);
-            assert!(
-                violations.is_empty(),
+            assert_eq!(
+                violations,
+                Vec::<&str>::new(),
                 "{}: forbidden frontend assets {violations:?}",
                 path.display()
             );
@@ -1327,8 +1349,9 @@ fn offline_asset_check_rejects_external_resources_and_svg_data() {
             "node.innerHTML = `<img src='http://example.test/image'>`;",
         ),
     ] {
-        assert!(
-            !external_asset_violations(source, extension).is_empty(),
+        assert_ne!(
+            external_asset_violations(source, extension),
+            Vec::<&str>::new(),
             "{source}"
         );
     }
@@ -1337,7 +1360,7 @@ fn offline_asset_check_rejects_external_resources_and_svg_data() {
         const svg = `<svg xmlns="http://www.w3.org/2000/svg"></svg>`;
         const local = `<img src="./local.png" alt="try https://example.test">`;
         fetch(this.requestBase + path);"#;
-    assert!(external_asset_violations(benign, "js").is_empty());
+    assert_eq!(external_asset_violations(benign, "js"), Vec::<&str>::new());
 }
 
 #[test]
@@ -1398,10 +1421,50 @@ fn audit_gates_deny_warnings_without_exceptions() {
     }
 }
 
-#[test]
-fn onboarding_uses_only_documentation_addresses_and_domains() {
+fn assert_documentation_addresses(content: &str, allowed_networks: &[ipnet::IpNet]) {
     use std::net::IpAddr;
 
+    let ipv4 = regex(r"\b(?:\d{1,3}\.){3}\d{1,3}\b");
+    let ipv6 = regex(r"(?i)[0-9a-f:]*:[0-9a-f:]+");
+    for address in ipv4
+        .find_iter(content)
+        .chain(ipv6.find_iter(content))
+        .filter_map(|token| token.as_str().parse::<IpAddr>().ok())
+    {
+        assert!(
+            allowed_networks
+                .iter()
+                .any(|range| range.contains(&address)),
+            "non-documentation address {address}"
+        );
+    }
+}
+
+fn is_documentation_domain(name: &str) -> bool {
+    ["test", "example", "invalid", "localhost"]
+        .iter()
+        .any(|suffix| name.ends_with(&format!(".{suffix}")))
+        || ["example.com", "example.net", "example.org"]
+            .iter()
+            .any(|reserved| name == *reserved || name.ends_with(&format!(".{reserved}")))
+}
+
+fn allowed_doc_networks() -> Vec<ipnet::IpNet> {
+    [
+        "192.0.2.0/24",
+        "198.51.100.0/24",
+        "203.0.113.0/24",
+        "2001:db8::/32",
+        "10.123.0.0/16",
+        "10.124.0.0/16",
+    ]
+    .into_iter()
+    .map(|range| range.parse().expect("documentation CIDR"))
+    .collect()
+}
+
+#[test]
+fn onboarding_uses_only_documentation_addresses_and_domains() {
     for path in ["AGENT.MD", "README.md"] {
         assert!(
             read(path)
@@ -1413,45 +1476,62 @@ fn onboarding_uses_only_documentation_addresses_and_domains() {
     }
 
     let goals = read("GOALS.md");
-    let allowed_networks: Vec<ipnet::IpNet> = [
-        "192.0.2.0/24",
-        "198.51.100.0/24",
-        "203.0.113.0/24",
-        "2001:db8::/32",
-        "10.123.0.0/16",
-        "10.124.0.0/16",
-    ]
-    .into_iter()
-    .map(|range| range.parse().expect("documentation CIDR"))
-    .collect();
-    let ipv4 = regex(r"\b(?:\d{1,3}\.){3}\d{1,3}\b");
-    let ipv6 = regex(r"(?i)[0-9a-f:]*:[0-9a-f:]+");
-    for address in ipv4
-        .find_iter(&goals)
-        .chain(ipv6.find_iter(&goals))
-        .filter_map(|token| token.as_str().parse::<IpAddr>().ok())
-    {
-        assert!(
-            allowed_networks
-                .iter()
-                .any(|range| range.contains(&address)),
-            "non-documentation address {address}"
-        );
-    }
+    let allowed_networks = allowed_doc_networks();
+    assert_documentation_addresses(&goals, &allowed_networks);
 
-    let links = regex(r"\[[^\]\n]*\]\((?:\./)?(?:[\w-]+/)+[\w.-]+\)");
+    let links = regex(r"\[[^\]\n]*\]\((?:\./)?(?:\.?[\w-]+/)+[\w.-]+\)");
     let prose = links.replace_all(&goals, "");
     let domain = regex(r"(?i)\b(?:[a-z0-9-]+\.)+[a-z][a-z0-9-]*\b");
     for token in domain.find_iter(&prose) {
         let name = token.as_str().to_ascii_lowercase();
         assert!(
-            ["test", "example", "invalid", "localhost"]
-                .iter()
-                .any(|suffix| name.ends_with(&format!(".{suffix}")))
-                || ["example.com", "example.net", "example.org"]
-                    .iter()
-                    .any(|reserved| name == *reserved || name.ends_with(&format!(".{reserved}"))),
+            is_documentation_domain(&name),
             "non-documentation domain {name}"
+        );
+    }
+}
+
+#[test]
+fn agent_skill_exists_has_valid_frontmatter_is_linked_and_is_sanitized() {
+    let skill_rel = ".agents/skills/use-fw-rules-manager/SKILL.md";
+    assert!(
+        repo_path(skill_rel).is_file(),
+        "missing in-repo agent skill {skill_rel}"
+    );
+    let skill = read(skill_rel);
+
+    let frontmatter = skill
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .map(|(fm, _)| fm)
+        .expect("SKILL.md must start with YAML frontmatter delimited by ---");
+    assert!(
+        frontmatter
+            .lines()
+            .any(|line| line.trim() == "name: use-fw-rules-manager"),
+        "SKILL.md frontmatter must declare `name: use-fw-rules-manager`"
+    );
+    assert!(
+        frontmatter
+            .lines()
+            .any(|line| line.starts_with("description:")
+                && line["description:".len()..].trim().len() > 10),
+        "SKILL.md frontmatter must declare a non-empty `description:`"
+    );
+
+    for doc in ["AGENT.MD", "README.md", "GOALS.md"] {
+        assert!(read(doc).contains(skill_rel), "{doc} must link {skill_rel}");
+    }
+
+    let allowed_networks = allowed_doc_networks();
+    assert_documentation_addresses(&skill, &allowed_networks);
+
+    let url_host = regex(r"(?i)https?://([a-z0-9.-]+)");
+    for cap in url_host.captures_iter(&skill) {
+        let host = cap[1].to_ascii_lowercase();
+        assert!(
+            is_documentation_domain(&host),
+            "non-documentation URL host in SKILL.md: {host}"
         );
     }
 }

@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(extract_quoted_items(input), vec!["eth0", "eth1", "wg0"]);
 
         let empty = r"INTEROut=()";
-        assert!(extract_quoted_items(empty).is_empty());
+        assert_eq!(extract_quoted_items(empty), [] as [String; 0]);
     }
 
     #[test]

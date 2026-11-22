@@ -10,6 +10,7 @@ This repository uses a modular documentation structure to optimize context windo
 - **[`API_REFERENCE.md`](file:///home/fallrik/Documents/workspaces/simply_fw_rules_manager/API_REFERENCE.md)**: Complete REST API specification, route payloads, query parameters, and expected HTTP status codes.
 - **[`FILE_MAP.MD`](file:///home/fallrik/Documents/workspaces/simply_fw_rules_manager/FILE_MAP.MD)**: Exhaustive directory and file-by-file codebase map to navigate without running expensive global searches.
 - **[`AGENT_NOTES.MD`](file:///home/fallrik/Documents/workspaces/simply_fw_rules_manager/AGENT_NOTES.MD)**: Living architectural memory, resolved edge cases, and lessons learned.
+- **[`use-fw-rules-manager`](.agents/skills/use-fw-rules-manager/SKILL.md)**: In-repo Agent Skill and operational cookbook (`CANONICAL_V1`, `OriginalUri`, routes, firewall/feed/Ansible workflows).
 
 ---
 

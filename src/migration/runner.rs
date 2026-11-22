@@ -3,8 +3,8 @@
 use std::{collections::HashSet, future::Future, pin::Pin};
 
 use sea_orm::{
-    ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseExecutor, DbErr, Schema, Set,
-    StatementBuilder, TransactionTrait, entity::prelude::*,
+    ActiveModelTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseExecutor,
+    DbErr, EntityTrait, Schema, Set, StatementBuilder, TransactionTrait,
 };
 use sea_schema::probe::SchemaProbe;
 use time::OffsetDateTime;

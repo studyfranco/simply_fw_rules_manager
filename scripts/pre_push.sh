@@ -4,6 +4,9 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 export LC_ALL=C
 
+rustc --version
+cargo clippy --version
+
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 

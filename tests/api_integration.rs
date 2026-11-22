@@ -293,8 +293,9 @@ async fn special_rules_validator_and_refactored_helpers_work() {
         script.contains("get_container_ipv4_on_network"),
         "imported special rules must use generic Docker helper functions"
     );
-    assert!(
-        !data["tools_functions"].as_array().unwrap().is_empty(),
+    assert_ne!(
+        data["tools_functions"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0],
         "firewall.tools helper functions must be parsed and returned"
     );
 

@@ -256,8 +256,7 @@ fn parse_docker_payloads(
             let name = rc
                 .names
                 .first()
-                .map(|n| n.trim_start_matches('/').to_owned())
-                .unwrap_or_default();
+                .map_or_default(|n| n.trim_start_matches('/').to_owned());
             let mut networks = BTreeMap::new();
             if let Some(ns) = rc.network_settings {
                 for (net_name, ep) in ns.networks {
@@ -284,15 +283,12 @@ fn parse_docker_payloads(
     let mut networks: Vec<DiscoveredNetwork> = raw_networks
         .into_iter()
         .map(|rn| {
-            let subnets = rn
-                .ipam
-                .map(|ipam| {
-                    ipam.config
-                        .into_iter()
-                        .filter_map(|c| c.subnet)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+            let subnets = rn.ipam.map_or_default(|ipam| {
+                ipam.config
+                    .into_iter()
+                    .filter_map(|c| c.subnet)
+                    .collect::<Vec<_>>()
+            });
             DiscoveredNetwork {
                 name: rn.name,
                 driver: rn.driver,
