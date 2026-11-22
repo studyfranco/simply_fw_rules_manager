@@ -2,7 +2,6 @@
 
 use std::net::SocketAddr;
 
-use sea_orm_migration::MigratorTrait;
 use tracing_subscriber::EnvFilter;
 
 use simply_fw_rules_manager::config::{get_secret_or_env, resolve_bind_addr};

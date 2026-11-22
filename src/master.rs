@@ -4,9 +4,9 @@ use std::fmt::Write as FmtWrite;
 use std::io::Write as IoWrite;
 use std::sync::OnceLock;
 
-use chrono::Utc;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::crypto::{SecretCipher, generate_signing_secret};
@@ -157,7 +157,7 @@ pub async fn ensure_master_key(
         .map_err(|e| sea_orm::DbErr::Custom(format!("failed to seal master secret: {e}")))?;
 
     let id = Uuid::new_v4();
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let model = api_key::ActiveModel {
         id: Set(id),
         name: Set("Master Key".to_owned()),

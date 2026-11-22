@@ -1,13 +1,15 @@
 //! Initial schema migration creating all `simply_fw_rules_manager` tables.
 
-use sea_orm_migration::prelude::*;
+use sea_orm::{
+    DbErr, DeriveIden,
+    sea_query::{ColumnDef, ForeignKey, ForeignKeyAction, IntoTableRef, Table},
+};
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
+use super::runner::SchemaManager;
 
 async fn create_api_keys_table(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
-        .create_table(
+        .execute(
             Table::create()
                 .table(ApiKeys::Table)
                 .if_not_exists()
@@ -83,7 +85,7 @@ async fn create_api_keys_table(manager: &SchemaManager<'_>) -> Result<(), DbErr>
 
 async fn create_audit_logs_table(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
-        .create_table(
+        .execute(
             Table::create()
                 .table(AuditLogs::Table)
                 .if_not_exists()
@@ -165,12 +167,12 @@ async fn create_fw_settings_table(manager: &SchemaManager<'_>) -> Result<(), DbE
             .timestamp_with_time_zone()
             .not_null(),
     );
-    manager.create_table(table).await
+    manager.execute(table).await
 }
 
 async fn create_fw_docker_inter_rules_table(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
-        .create_table(
+        .execute(
             Table::create()
                 .table(FwDockerInterRules::Table)
                 .if_not_exists()
@@ -231,7 +233,7 @@ async fn create_fw_docker_inter_rules_table(manager: &SchemaManager<'_>) -> Resu
 
 async fn create_fw_zone_rules_table(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
-        .create_table(
+        .execute(
             Table::create()
                 .table(FwZoneRules::Table)
                 .if_not_exists()
@@ -275,7 +277,7 @@ async fn create_fw_zone_rules_table(manager: &SchemaManager<'_>) -> Result<(), D
 
 async fn create_fw_special_rules_table(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
-        .create_table(
+        .execute(
             Table::create()
                 .table(FwSpecialRules::Table)
                 .if_not_exists()
@@ -313,7 +315,7 @@ async fn create_fw_special_rules_table(manager: &SchemaManager<'_>) -> Result<()
 
 async fn create_fw_blocklists_table(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
-        .create_table(
+        .execute(
             Table::create()
                 .table(FwBlocklists::Table)
                 .if_not_exists()
@@ -369,34 +371,31 @@ async fn create_fw_blocklists_table(manager: &SchemaManager<'_>) -> Result<(), D
         .await
 }
 
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        create_api_keys_table(manager).await?;
-        create_audit_logs_table(manager).await?;
-        create_fw_settings_table(manager).await?;
-        create_fw_docker_inter_rules_table(manager).await?;
-        create_fw_zone_rules_table(manager).await?;
-        create_fw_special_rules_table(manager).await?;
-        create_fw_blocklists_table(manager).await
-    }
+pub(super) async fn up(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    create_api_keys_table(manager).await?;
+    create_audit_logs_table(manager).await?;
+    create_fw_settings_table(manager).await?;
+    create_fw_docker_inter_rules_table(manager).await?;
+    create_fw_zone_rules_table(manager).await?;
+    create_fw_special_rules_table(manager).await?;
+    create_fw_blocklists_table(manager).await
+}
 
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        for table in [
-            FwBlocklists::Table.into_table_ref(),
-            FwSpecialRules::Table.into_table_ref(),
-            FwZoneRules::Table.into_table_ref(),
-            FwDockerInterRules::Table.into_table_ref(),
-            FwSettings::Table.into_table_ref(),
-            AuditLogs::Table.into_table_ref(),
-            ApiKeys::Table.into_table_ref(),
-        ] {
-            manager
-                .drop_table(Table::drop().table(table).if_exists().to_owned())
-                .await?;
-        }
-        Ok(())
+pub(super) async fn down(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    for table in [
+        FwBlocklists::Table.into_table_ref(),
+        FwSpecialRules::Table.into_table_ref(),
+        FwZoneRules::Table.into_table_ref(),
+        FwDockerInterRules::Table.into_table_ref(),
+        FwSettings::Table.into_table_ref(),
+        AuditLogs::Table.into_table_ref(),
+        ApiKeys::Table.into_table_ref(),
+    ] {
+        manager
+            .execute(Table::drop().table(table).if_exists().to_owned())
+            .await?;
     }
+    Ok(())
 }
 
 #[derive(DeriveIden)]

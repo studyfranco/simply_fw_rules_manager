@@ -7,11 +7,11 @@ use axum::Extension;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use chrono::{DateTime, Utc};
 use ipnet::IpNet;
 use reqwest::Client;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::api::audit::record_audit;
@@ -54,13 +54,16 @@ pub struct BlocklistResponse {
     /// Number of valid entries parsed in the last test.
     pub last_test_entries: Option<i32>,
     /// UTC timestamp of the last test.
-    pub last_test_at: Option<DateTime<Utc>>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub last_test_at: Option<OffsetDateTime>,
     /// Relative ordering when generating `firewall.get.list`.
     pub sort_order: i32,
     /// UTC creation timestamp.
-    pub created_at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
     /// UTC modification timestamp.
-    pub updated_at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
 }
 
 impl From<fw_blocklist::Model> for BlocklistResponse {
@@ -174,7 +177,7 @@ pub async fn create_blocklist(
         )));
     }
 
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let id = Uuid::new_v4();
     let model = fw_blocklist::ActiveModel {
         id: Set(id),
@@ -248,7 +251,7 @@ pub async fn update_blocklist(
         .map(|d| d.trim().to_owned())
         .filter(|d| !d.is_empty()));
     active.sort_order = Set(payload.sort_order);
-    active.updated_at = Set(Utc::now());
+    active.updated_at = Set(OffsetDateTime::now_utc());
 
     let updated = active.update(&state.db).await?;
 
@@ -419,7 +422,7 @@ pub async fn test_blocklist(
         )
     };
 
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let mut active: fw_blocklist::ActiveModel = existing.clone().into();
     active.last_test_ok = Set(Some(valid));
     active.last_test_entries = Set(Some(i32::try_from(total_valid).unwrap_or(i32::MAX)));

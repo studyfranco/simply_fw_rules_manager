@@ -198,16 +198,37 @@ fn manifest_policy(source: &str) -> Vec<String> {
             violations.push(format!("lints.clippy.{lint} must not be allow"));
         }
     }
-    let sqlx_features = |dependency| -> BTreeSet<_> {
-        get(&["dependencies", dependency, "features"])
-            .into_iter()
-            .flatten()
-            .map(|token| toml_text(token))
-            .filter(|feature| feature.starts_with("sqlx-"))
-            .collect()
-    };
-    for feature in sqlx_features("sea-orm").difference(&sqlx_features("sea-orm-migration")) {
-        violations.push(format!("sea-orm-migration is missing {feature}"));
+    for dependency in ["sea-orm", "sea-schema"] {
+        let features = get(&["dependencies", dependency, "features"]).unwrap_or_default();
+        if level(get(&["dependencies", dependency, "default-features"])) != "false" {
+            violations.push(format!("{dependency} must disable default features"));
+        }
+        for feature in ["sqlx-mysql", "sqlx-postgres", "sqlx-sqlite"] {
+            if !features.iter().any(|token| toml_text(token) == feature) {
+                violations.push(format!("{dependency} is missing {feature}"));
+            }
+        }
+    }
+    for forbidden in ["chrono", "chrono-tz", "sea-orm-migration"] {
+        if values.iter().any(|(path, value)| {
+            path.windows(2).any(|pair| {
+                matches!(
+                    pair[0].as_str(),
+                    "dependencies" | "dev-dependencies" | "build-dependencies"
+                ) && pair[1] == forbidden
+            }) || (path.last().is_some_and(|key| key == "package")
+                && level(Some(value)) == forbidden)
+        }) {
+            violations.push(format!("forbidden dependency {forbidden}"));
+        }
+    }
+    if tokens.iter().any(|token| {
+        matches!(
+            toml_text(token).as_str(),
+            "local-offset" | "time/local-offset" | "time?/local-offset"
+        )
+    }) {
+        violations.push("time must omit local-offset".to_owned());
     }
     violations
 }
@@ -229,10 +250,12 @@ fn manifest_policy_rejects_drift() {
         all = { priority = -2, level = 'warn' }
         pedantic = "warn"
         [dependencies.sea-orm]
+        default-features = false
         features = ["sqlx-sqlite", # Keep database support in sync.
-            "sqlx-postgres"]
+            "sqlx-postgres", "sqlx-mysql"]
         [dependencies]
-        sea-orm-migration = { features = ['sqlx-postgres', 'sqlx-sqlite'] }
+        sea-schema = { default-features = false, features = ['sqlx-postgres', 'sqlx-sqlite', 'sqlx-mysql'] }
+        time = { features = ["serde"] }
     "#;
     assert!(manifest_policy(manifest).is_empty());
     for (before, after, diagnostic) in [
@@ -255,6 +278,22 @@ fn manifest_policy_rejects_drift() {
             "clippy.needless_pass_by_value",
         ),
         ("'sqlx-sqlite'", "'with-uuid'", "missing sqlx-sqlite"),
+        (
+            "default-features = false",
+            "default-features = true",
+            "disable default features",
+        ),
+        ("time = ", "chrono = ", "forbidden dependency chrono"),
+        (
+            "time = ",
+            "t = { package = 'sea-orm-migration' }\ntime = ",
+            "forbidden dependency sea-orm-migration",
+        ),
+        (
+            r#""serde""#,
+            r#""serde", "local-offset""#,
+            "time must omit local-offset",
+        ),
     ] {
         let violations = manifest_policy(&manifest.replace(before, after));
         assert!(
@@ -1299,4 +1338,120 @@ fn offline_asset_check_rejects_external_resources_and_svg_data() {
         const local = `<img src="./local.png" alt="try https://example.test">`;
         fetch(this.requestBase + path);"#;
     assert!(external_asset_violations(benign, "js").is_empty());
+}
+
+#[test]
+fn rust_tests_cannot_be_ignored() {
+    let ignored = regex(r"#\s*\[\s*ignore\b|\bcfg_attr\s*\([^\]]*,\s*ignore\b");
+    for path in rust_files("src").chain(rust_files("tests")) {
+        let source = read(path.to_str().expect("UTF-8 path"));
+        assert!(
+            !ignored.is_match(&rust_source(&source).code),
+            "{} contains an ignore attribute",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn lockfile_excludes_retired_dependencies() {
+    let lockfile = read("Cargo.lock");
+    for forbidden in ["chrono", "chrono-tz", "sea-orm-migration"] {
+        assert!(
+            !lockfile.contains(&format!("name = \"{forbidden}\"")),
+            "forbidden lockfile package {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn audit_gates_deny_warnings_without_exceptions() {
+    let ignore = regex(r"--ignore\s+RUSTSEC-|\bignore\s*[:=]");
+    for path in [PathBuf::from(".cargo/audit.toml")]
+        .into_iter()
+        .chain(files_under(".github/workflows", true))
+        .chain(files_under("scripts", true))
+    {
+        let source = read(path.to_str().expect("UTF-8 path"));
+        assert!(
+            !ignore.is_match(&source),
+            "{} contains an advisory exception",
+            path.display()
+        );
+    }
+    let strict_audit = regex(r"(?m)^[^#\n]*\bcargo audit --deny warnings\b");
+    for script in ["scripts/pre_push.sh", "scripts/test_e2e.sh"] {
+        assert!(
+            strict_audit.is_match(&read(script)),
+            "{script} must run the strict audit"
+        );
+    }
+    let pre_push = regex(r"(?m)^\s*run:\s*\./scripts/pre_push\.sh\s*$");
+    for workflow in [
+        ".github/workflows/ci.yml",
+        ".github/workflows/docker-publish.yml",
+    ] {
+        assert!(
+            pre_push.is_match(&read(workflow)),
+            "{workflow} must run the shared checks"
+        );
+    }
+}
+
+#[test]
+fn onboarding_uses_only_documentation_addresses_and_domains() {
+    use std::net::IpAddr;
+
+    for path in ["AGENT.MD", "README.md"] {
+        assert!(
+            read(path)
+                .lines()
+                .take(5)
+                .any(|line| line.contains("](GOALS.md)")),
+            "{path} must link GOALS.md near the top"
+        );
+    }
+
+    let goals = read("GOALS.md");
+    let allowed_networks: Vec<ipnet::IpNet> = [
+        "192.0.2.0/24",
+        "198.51.100.0/24",
+        "203.0.113.0/24",
+        "2001:db8::/32",
+        "10.123.0.0/16",
+        "10.124.0.0/16",
+    ]
+    .into_iter()
+    .map(|range| range.parse().expect("documentation CIDR"))
+    .collect();
+    let ipv4 = regex(r"\b(?:\d{1,3}\.){3}\d{1,3}\b");
+    let ipv6 = regex(r"(?i)[0-9a-f:]*:[0-9a-f:]+");
+    for address in ipv4
+        .find_iter(&goals)
+        .chain(ipv6.find_iter(&goals))
+        .filter_map(|token| token.as_str().parse::<IpAddr>().ok())
+    {
+        assert!(
+            allowed_networks
+                .iter()
+                .any(|range| range.contains(&address)),
+            "non-documentation address {address}"
+        );
+    }
+
+    let links = regex(r"\[[^\]\n]*\]\((?:\./)?(?:[\w-]+/)+[\w.-]+\)");
+    let prose = links.replace_all(&goals, "");
+    let domain = regex(r"(?i)\b(?:[a-z0-9-]+\.)+[a-z][a-z0-9-]*\b");
+    for token in domain.find_iter(&prose) {
+        let name = token.as_str().to_ascii_lowercase();
+        assert!(
+            ["test", "example", "invalid", "localhost"]
+                .iter()
+                .any(|suffix| name.ends_with(&format!(".{suffix}")))
+                || ["example.com", "example.net", "example.org"]
+                    .iter()
+                    .any(|reserved| name == *reserved || name.ends_with(&format!(".{reserved}"))),
+            "non-documentation domain {name}"
+        );
+    }
 }

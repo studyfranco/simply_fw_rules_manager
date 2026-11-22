@@ -7,9 +7,9 @@ use axum::Extension;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use chrono::{DateTime, Utc};
 use sea_orm::{ActiveModelTrait, EntityTrait, QueryOrder, Set};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::api::audit::record_audit;
@@ -98,7 +98,8 @@ pub struct FwSettingsResponse {
     /// Hook name triggered for Docker container sync.
     pub hook_update_containers_name: String,
     /// UTC timestamp of the last update.
-    pub updated_at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
 }
 
 impl From<fw_settings::Model> for FwSettingsResponse {
@@ -407,7 +408,7 @@ pub async fn update_settings(
     apply_network_and_country_settings(&mut active, &mut rest)?;
     apply_infra_and_hook_settings(&state, &mut active, &mut rest)?;
 
-    active.updated_at = Set(Utc::now());
+    active.updated_at = Set(OffsetDateTime::now_utc());
     let updated = active.update(&state.db).await?;
 
     record_audit(
@@ -445,9 +446,11 @@ pub struct ZoneRuleResponse {
     /// Sort index within the zone.
     pub sort_order: i32,
     /// UTC creation timestamp.
-    pub created_at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
     /// UTC modification timestamp.
-    pub updated_at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
 }
 
 /// Request payload for creating/updating a zone rule.
@@ -553,7 +556,7 @@ pub async fn create_zone_rule(
     }
     let (value, container_name) = validate_zone_rule_value(&rule_kind, &payload.value)?;
 
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let id = Uuid::new_v4();
     let model = fw_zone_rule::ActiveModel {
         id: Set(id),
@@ -647,7 +650,7 @@ pub async fn update_zone_rule(
         .map(|c| c.trim().to_owned())
         .filter(|c| !c.is_empty()));
     active.sort_order = Set(payload.sort_order);
-    active.updated_at = Set(Utc::now());
+    active.updated_at = Set(OffsetDateTime::now_utc());
 
     let updated = active.update(&state.db).await?;
 
@@ -742,9 +745,11 @@ pub struct DockerInterRuleResponse {
     /// Ordering priority.
     pub sort_order: i32,
     /// UTC creation timestamp.
-    pub created_at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
     /// UTC modification timestamp.
-    pub updated_at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
 }
 
 /// Request payload for creating/updating a Docker inter-container rule.
@@ -838,7 +843,7 @@ pub async fn create_docker_inter_rule(
         &payload.ports,
     )?;
 
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let id = Uuid::new_v4();
     let model = fw_docker_inter_rule::ActiveModel {
         id: Set(id),
@@ -928,7 +933,7 @@ pub async fn update_docker_inter_rule(
         .map(|c| c.trim().to_owned())
         .filter(|c| !c.is_empty()));
     active.sort_order = Set(payload.sort_order);
-    active.updated_at = Set(Utc::now());
+    active.updated_at = Set(OffsetDateTime::now_utc());
 
     let updated = active.update(&state.db).await?;
 

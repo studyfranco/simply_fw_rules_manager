@@ -4,6 +4,7 @@ use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::{ArrayType, ColumnType, Nullable, ValueType, ValueTypeErr};
 use sea_orm::{ColIdx, QueryResult, TryGetError, TryGetable};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 /// Semantic two-variant API key capability flag persisted as SQL `BOOLEAN`.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,9 +106,9 @@ pub struct Model {
     /// Comma-separated IP/CIDR allowlist.
     pub bound_ips: Option<String>,
     /// Creation timestamp.
-    pub created_at: DateTimeUtc,
+    pub created_at: OffsetDateTime,
     /// Last update timestamp.
-    pub updated_at: DateTimeUtc,
+    pub updated_at: OffsetDateTime,
 }
 
 /// Relations from `api_keys`.

@@ -1,6 +1,7 @@
 //! `fw_docker_inter_rules` entity model (`dockerAccessBetweenThem`).
 
 use sea_orm::entity::prelude::*;
+use time::OffsetDateTime;
 
 /// The `fw_docker_inter_rules` row.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -26,9 +27,9 @@ pub struct Model {
     /// Sort order for deterministic output in `firewall.settings`.
     pub sort_order: i32,
     /// Creation timestamp.
-    pub created_at: DateTimeUtc,
+    pub created_at: OffsetDateTime,
     /// Last update timestamp.
-    pub updated_at: DateTimeUtc,
+    pub updated_at: OffsetDateTime,
 }
 
 /// Relations from `fw_docker_inter_rules`.

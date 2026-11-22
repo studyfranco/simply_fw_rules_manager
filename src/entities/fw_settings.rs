@@ -1,6 +1,7 @@
 //! `fw_settings` singleton entity model (`id = 1`).
 
 use sea_orm::entity::prelude::*;
+use time::OffsetDateTime;
 
 /// The `fw_settings` singleton row.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -67,7 +68,7 @@ pub struct Model {
     /// Hook name in `simply_hook_executor` to update Docker containers.
     pub hook_update_containers_name: String,
     /// Last update timestamp.
-    pub updated_at: DateTimeUtc,
+    pub updated_at: OffsetDateTime,
 }
 
 /// Relations from `fw_settings`.

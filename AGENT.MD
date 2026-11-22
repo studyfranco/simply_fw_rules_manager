@@ -1,5 +1,7 @@
 # AGENT.MD — Architectural & Operational Specification (`simply_fw_rules_manager`)
 
+[Goals and deployment boundaries](GOALS.md)
+
 ## 📑 Document Hierarchy & Source of Truth
 This repository uses a modular documentation structure to optimize context windows for AI Coding Agents. Before making architectural, database, or routing changes, consult the relevant specification file:
 - **[`AGENT.MD`](file:///home/fallrik/Documents/workspaces/simply_fw_rules_manager/AGENT.MD) (This File)**: High-level architecture, core domain logic, security constraints, firewall script generation, Docker discovery, Bash/ShellCheck integrity verification, and strict coding rules.
@@ -38,7 +40,8 @@ On first startup (or via an explicit import API/UI action), the service parses e
 
 - **Language:** Rust (`edition = "2024"`, with the `rust-version` field omitted)
 - **Web Framework:** `axum` (v0.8) + `tokio` + `tower-http`
-- **ORM & Database:** `sea-orm` (v2.0) + `sea-orm-migration` — **100% SQL-Agnostic** (`sqlx-sqlite`, `sqlx-postgres`, `sqlx-mysql`).
+- **ORM & Database:** `sea-orm` (v2.0) and `sea-schema` via `src/migration/runner.rs` — **100% SQL-Agnostic** (`sqlx-sqlite`, `sqlx-postgres`, `sqlx-mysql`).
+  - Use UTC `time::OffsetDateTime` with RFC 3339 Serde adapters for API timestamps.
   - Apply migrations before serving requests. Configure SQLite connections through `SqliteConnectOptions` and use a single-connection pool with WAL, foreign keys enabled, and a 5-second busy timeout.
   - Use SeaORM and SeaQuery for all database operations. The sole raw SQL exception is `SELECT 1` in `src/db.rs::check_ready`.
   - Use `.text()` for variable-length values such as sealed secrets, IP bindings, URLs, paths, ports, rule values, comments, and audit targets.
@@ -53,8 +56,9 @@ On first startup (or via an explicit import API/UI action), the service parses e
   - Production code and HTTP handlers MUST NOT use `.unwrap()` or `.expect()`. Propagate all errors cleanly via `Result<T, AppError>`.
 - **Dependency Freshness & Security Auditing Policy:**
   - All external libraries and Cargo dependencies MUST always be kept at their latest compatible versions (`cargo update`, latest semver).
-  - Both `scripts/test_e2e.sh` and CI workflows (`.github/workflows/ci.yml`, `.github/workflows/docker-publish.yml`) enforce automated dependency updates (`cargo update`) and security vulnerability audits (`cargo audit --ignore RUSTSEC-2026-0459`).
-  - Deployments and PR merges require a clean security audit and zero failing tests as mandatory prerequisites. Outdated or vulnerable dependencies must never be left unaddressed.
+  - CI and `scripts/test_e2e.sh` require `cargo audit --deny warnings` with zero advisory ignores.
+  - Run `./scripts/pre_push.sh` before pushing. Enable the versioned hook with `git config core.hooksPath .githooks`.
+  - The pre-push and CI gate checks formatting, Clippy, workspace tests with zero failures and zero ignored tests, the dependency audit, and E2E script syntax.
 
 ---
 

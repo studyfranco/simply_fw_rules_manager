@@ -1,6 +1,7 @@
 //! `fw_blocklists` entity model (`firewall.get.list` feeds).
 
 use sea_orm::entity::prelude::*;
+use time::OffsetDateTime;
 
 /// The `fw_blocklists` row.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -23,13 +24,13 @@ pub struct Model {
     /// Count of valid IPv4/IPv6/CIDR entries parsed during the last live test.
     pub last_test_entries: Option<i32>,
     /// Timestamp of the last live HTTP validation test.
-    pub last_test_at: Option<DateTimeUtc>,
+    pub last_test_at: Option<OffsetDateTime>,
     /// Deterministic ordering in `firewall.get.list`.
     pub sort_order: i32,
     /// Creation timestamp.
-    pub created_at: DateTimeUtc,
+    pub created_at: OffsetDateTime,
     /// Last update timestamp.
-    pub updated_at: DateTimeUtc,
+    pub updated_at: OffsetDateTime,
 }
 
 /// Relations from `fw_blocklists`.

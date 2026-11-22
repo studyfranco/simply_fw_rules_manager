@@ -5,9 +5,9 @@ use std::path::Path;
 use axum::Extension;
 use axum::Json;
 use axum::extract::State;
-use chrono::{DateTime, Utc};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::api::audit::record_audit;
 use crate::entities::{api_key, fw_settings, fw_special_rules};
@@ -44,7 +44,8 @@ pub struct SpecialRulesResponse {
     /// Variable identifiers known to `firewall.tools` and `firewall.settings`.
     pub known_variables: Vec<String>,
     /// Timestamp of the last update.
-    pub updated_at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
 }
 
 /// Request payload for `POST /api/firewall/special-rules/validate` and `PUT /api/firewall/special-rules`.
@@ -201,7 +202,7 @@ pub async fn update_special_rules(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let mut active: fw_special_rules::ActiveModel = existing.into();
     active.script_content = Set(payload.script_content);
     active.last_validation_ok = Set(report.valid);

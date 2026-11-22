@@ -1,6 +1,7 @@
 //! `audit_logs` entity model.
 
 use sea_orm::entity::prelude::*;
+use time::OffsetDateTime;
 
 /// The `audit_logs` row.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -25,7 +26,7 @@ pub struct Model {
     /// Client IP address.
     pub client_ip: String,
     /// Event timestamp.
-    pub timestamp: DateTimeUtc,
+    pub timestamp: OffsetDateTime,
 }
 
 /// Relations from `audit_logs`.

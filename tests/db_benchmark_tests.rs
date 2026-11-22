@@ -4,15 +4,14 @@
 
 use std::time::Instant;
 
-use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, Set,
     Statement,
 };
-use sea_orm_migration::MigratorTrait;
 use simply_fw_rules_manager::db::connect;
 use simply_fw_rules_manager::entities::{api_key, audit_log, fw_docker_inter_rule, fw_zone_rule};
 use simply_fw_rules_manager::migration::Migrator;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 const BATCH_SIZE: usize = 300;
@@ -51,7 +50,7 @@ impl BenchmarkResult {
 }
 
 async fn bench_batch_ingestion(db: &DatabaseConnection) -> BenchmarkResult {
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let single_models: Vec<fw_zone_rule::ActiveModel> = (0..BATCH_SIZE)
         .map(|i| fw_zone_rule::ActiveModel {
             id: Set(Uuid::new_v4()),
@@ -107,7 +106,7 @@ async fn bench_batch_ingestion(db: &DatabaseConnection) -> BenchmarkResult {
     )
 }
 
-async fn seed_benchmark_api_keys(db: &DatabaseConnection, now: chrono::DateTime<Utc>) -> Uuid {
+async fn seed_benchmark_api_keys(db: &DatabaseConnection, now: OffsetDateTime) -> Uuid {
     let target_key_id = Uuid::new_v4();
     let mut api_keys = Vec::with_capacity(100);
     for i in 0..100 {
@@ -142,7 +141,7 @@ async fn seed_benchmark_api_keys(db: &DatabaseConnection, now: chrono::DateTime<
 }
 
 async fn seed_benchmark_dataset(db: &DatabaseConnection) -> Uuid {
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let target_key_id = seed_benchmark_api_keys(db, now).await;
 
     let mut zone_rules = Vec::with_capacity(DATASET_SIZE);

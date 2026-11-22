@@ -3,10 +3,11 @@
 use std::str::FromStr;
 use std::time::Duration;
 
+use sea_orm::sea_query::{Alias, Expr, Func};
 use sea_orm::sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
 };
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement};
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement};
 
 /// `SQLite` permits a single writer connection to avoid DDL/transaction races.
 pub const SQLITE_MAX_CONNECTIONS: u32 = 1;
@@ -46,7 +47,6 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
 /// # Errors
 /// Returns [`DbErr`] if any migration fails.
 pub async fn run_migrations(db: &DatabaseConnection) -> Result<(), DbErr> {
-    use sea_orm_migration::MigratorTrait;
     crate::migration::Migrator::up(db, None).await
 }
 
@@ -55,9 +55,37 @@ pub async fn run_migrations(db: &DatabaseConnection) -> Result<(), DbErr> {
 /// # Errors
 /// Returns [`DbErr`] if the backend catalog query fails or the backend is unsupported.
 pub async fn has_index(db: &DatabaseConnection, table: &str, index: &str) -> Result<bool, DbErr> {
-    sea_orm_migration::SchemaManager::new(db)
+    crate::migration::runner::SchemaManager::new(db)
         .has_index(table, index)
         .await
+}
+
+/// Produces a sortable UTC key for legacy and current SQLite RFC 3339 values.
+pub(crate) fn utc_sort_key(backend: DatabaseBackend, value: Expr) -> Expr {
+    if backend != DatabaseBackend::Sqlite {
+        return value;
+    }
+
+    // SQLite compares these values as text. Legacy values end in +00:00
+    // while current values end in Z, and fractional precision varies.
+    let seconds = Func::cust(Alias::new("substr"))
+        .arg(value.clone())
+        .arg(1)
+        .arg(19);
+    let without_offset = Func::cust(Alias::new("replace"))
+        .arg(value)
+        .arg("+00:00")
+        .arg("");
+    let utc = Func::cust(Alias::new("rtrim")).arg(without_offset).arg("Z");
+    let padded = Func::cust(Alias::new("printf"))
+        .arg("%s0000000000")
+        .arg(utc);
+    let nanos = Func::cust(Alias::new("substr")).arg(padded).arg(21).arg(9);
+    Func::cust(Alias::new("printf"))
+        .arg("%s%s")
+        .arg(seconds)
+        .arg(nanos)
+        .into()
 }
 
 /// Executes a lightweight health query (`SELECT 1`) for readiness probes.

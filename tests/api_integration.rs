@@ -2,11 +2,10 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use chrono::Utc;
 use sea_orm::{ActiveModelTrait, Set};
-use sea_orm_migration::MigratorTrait;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 use tower::ServiceExt;
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
@@ -38,7 +37,7 @@ async fn setup_test_env() -> (axum::Router, AppState) {
     let key_hash = hex::encode(hasher.finalize());
     let sealed_secret = cipher.seal(TEST_MASTER_SECRET).expect("seal secret");
 
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let master_row = api_key::ActiveModel {
         id: Set(master_id),
         name: Set("Master Key".to_owned()),
@@ -104,7 +103,7 @@ fn signed_request(
     signing_secret: &str,
     body_opt: Option<&Value>,
 ) -> Request<Body> {
-    let timestamp = Utc::now().timestamp().to_string();
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp().to_string();
     signed_request_with_ts(
         method_str,
         uri,
@@ -514,7 +513,7 @@ async fn assert_sig_prefix_and_replay_guards(
     let (st_prefix, _) = response_json(app.clone().oneshot(req_prefix).await.unwrap()).await;
     assert_eq!(st_prefix, StatusCode::UNAUTHORIZED);
 
-    let replay_ts = Utc::now().timestamp().to_string();
+    let replay_ts = OffsetDateTime::now_utc().unix_timestamp().to_string();
     let mut req1 = signed_request_with_ts(
         "GET",
         "/api/settings?replay_test=1",
@@ -891,7 +890,7 @@ async fn security_hardening_bash_injection_ssrf_traversal_and_r4_rbac() {
     assert_eq!(st, StatusCode::OK);
     assert_eq!(resp_cfg2["has_hook_api_key"], true);
 
-    let ts = Utc::now().timestamp().to_string();
+    let ts = OffsetDateTime::now_utc().unix_timestamp().to_string();
     let sig = compute_signature(TEST_MASTER_SECRET, "GET", "/api/settings", &ts, b"").unwrap();
     let no_ci_req = Request::builder()
         .method("GET")
@@ -909,4 +908,68 @@ async fn security_hardening_bash_injection_ssrf_traversal_and_r4_rbac() {
     );
     let (st, _) = response_json(app.oneshot(no_ci_req).await.unwrap()).await;
     assert_eq!(st, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn audit_bounds_and_sorting_accept_legacy_sqlite_timestamps() {
+    use sea_orm::ConnectionTrait;
+    use sea_orm::sea_query::{Expr, Query};
+    use simply_fw_rules_manager::entities::audit_log::{Column, Entity};
+
+    let (app, state) = setup_test_env().await;
+    for (action, timestamp) in [
+        ("whole", "2026-01-01T00:00:10Z"),
+        ("legacy", "2026-01-01T00:00:10.120+00:00"),
+        ("current", "2026-01-01T00:00:10.12Z"),
+        ("next", "2026-01-01T00:00:10.123Z"),
+    ] {
+        state
+            .db
+            .execute(
+                Query::insert()
+                    .into_table(Entity)
+                    .columns([
+                        Column::Id,
+                        Column::ApiKeyName,
+                        Column::ApiKeyPrefix,
+                        Column::Action,
+                        Column::ClientIp,
+                        Column::Timestamp,
+                    ])
+                    .values_panic([
+                        Expr::val(Uuid::new_v4()),
+                        Expr::val("Test Key"),
+                        Expr::val("test-key"),
+                        Expr::val(action),
+                        Expr::val("192.0.2.10"),
+                        Expr::val(timestamp),
+                    ]),
+            )
+            .await
+            .expect("seed audit row");
+    }
+
+    let request = signed_request(
+        "GET",
+        "/api/audit-logs?since=2026-01-01T00:00:10Z&until=2026-01-01T00:00:10.12Z",
+        TEST_MASTER_KEY,
+        TEST_MASTER_SECRET,
+        None,
+    );
+    let (status, response) = response_json(app.oneshot(request).await.unwrap()).await;
+    assert_eq!(status, StatusCode::OK);
+    let entries = response.as_array().expect("audit entries");
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[2]["action"], "whole");
+    let actions: std::collections::BTreeSet<_> = entries[..2]
+        .iter()
+        .map(|entry| {
+            assert_eq!(entry["timestamp"], "2026-01-01T00:00:10.12Z");
+            entry["action"].as_str().expect("action")
+        })
+        .collect();
+    assert_eq!(
+        actions,
+        std::collections::BTreeSet::from(["current", "legacy"])
+    );
 }

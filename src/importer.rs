@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use chrono::Utc;
 use regex::Regex;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::entities::{
@@ -61,7 +61,7 @@ pub async fn seed_if_empty(
 async fn upsert_imported_settings(
     db: &DatabaseConnection,
     parsed: &ParsedFirewallSettings,
-    now: chrono::DateTime<Utc>,
+    now: OffsetDateTime,
 ) -> Result<(), sea_orm::DbErr> {
     let output_dir = std::env::var("FW_OUTPUT_DIR").unwrap_or_else(|_| "/etc/firewall".to_owned());
     let tools_path =
@@ -136,7 +136,7 @@ async fn upsert_imported_settings(
 async fn insert_imported_docker_rules(
     db: &DatabaseConnection,
     entries: &[String],
-    now: chrono::DateTime<Utc>,
+    now: OffsetDateTime,
 ) -> Result<usize, sea_orm::DbErr> {
     let mut docker_inter_rows = Vec::new();
     for (idx, entry) in entries.iter().enumerate() {
@@ -170,7 +170,7 @@ async fn insert_imported_docker_rules(
 async fn insert_imported_zone_rules(
     db: &DatabaseConnection,
     entries: Vec<(String, String, String)>,
-    now: chrono::DateTime<Utc>,
+    now: OffsetDateTime,
 ) -> Result<usize, sea_orm::DbErr> {
     let mut zone_rows = Vec::new();
     for (idx, (zone, rule_kind, val)) in entries.into_iter().enumerate() {
@@ -204,7 +204,7 @@ async fn insert_imported_zone_rules(
 async fn upsert_imported_special_rules(
     db: &DatabaseConnection,
     special_raw: &str,
-    now: chrono::DateTime<Utc>,
+    now: OffsetDateTime,
 ) -> Result<(), sea_orm::DbErr> {
     let refactored_special = refactor_special_rules_script(special_raw);
     let special_model = fw_special_rules::ActiveModel {
@@ -229,7 +229,7 @@ async fn upsert_imported_special_rules(
 async fn insert_imported_blocklists(
     db: &DatabaseConnection,
     get_list_raw: &str,
-    now: chrono::DateTime<Utc>,
+    now: OffsetDateTime,
 ) -> Result<usize, sea_orm::DbErr> {
     let blocklists = parse_get_list_feeds(get_list_raw);
     let mut blocklist_rows = Vec::new();
@@ -290,7 +290,7 @@ pub async fn import_from_directory(
         fw_blocklist::Entity::delete_many().exec(db).await?;
     }
 
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     upsert_imported_settings(db, &parsed, now).await?;
     let docker_inter_count =
         insert_imported_docker_rules(db, &parsed.docker_access_between_them, now).await?;

@@ -1,5 +1,7 @@
 # simply_fw_rules_manager
 
+[Goals and deployment boundaries](GOALS.md)
+
 Simply efficient. Linux firewall & container flow orchestrator.
 
 `simply_fw_rules_manager` is a high-assurance, self-hosted API and dashboard for centrally managing

@@ -1,6 +1,7 @@
 //! `fw_special_rules` singleton entity model (`id = 1`).
 
 use sea_orm::entity::prelude::*;
+use time::OffsetDateTime;
 
 /// The `fw_special_rules` singleton row.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -18,7 +19,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text", nullable)]
     pub last_validation_json: Option<String>,
     /// Last update timestamp.
-    pub updated_at: DateTimeUtc,
+    pub updated_at: OffsetDateTime,
 }
 
 /// Relations from `fw_special_rules`.

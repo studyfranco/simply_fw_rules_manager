@@ -1,8 +1,8 @@
 //! Signed `CANONICAL_V1` HTTP client for triggering hooks on `simply_hook_executor`.
 
-use chrono::Utc;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::crypto::{SecretCipher, compute_signature};
 use crate::entities::fw_settings;
@@ -77,7 +77,7 @@ pub async fn trigger_hook(
     let full_url = format!("{trimmed_base}/api/hooks/{hook_name}/execute");
 
     let body_bytes = b"{}";
-    let timestamp = Utc::now().timestamp().to_string();
+    let timestamp = OffsetDateTime::now_utc().unix_timestamp().to_string();
     let signature = compute_signature(
         &signing_secret,
         "POST",

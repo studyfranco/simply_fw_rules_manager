@@ -3,14 +3,16 @@
 use axum::Extension;
 use axum::Json;
 use axum::extract::State;
-use chrono::{DateTime, Utc};
+use sea_orm::sea_query::{Expr, ExprTrait};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
     QueryOrder, QuerySelect, Set,
 };
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::db::utc_sort_key;
 use crate::entities::prelude::AuditLog;
 use crate::entities::{api_key, audit_log};
 use crate::error::AppError;
@@ -39,7 +41,7 @@ pub async fn record_audit(
         target_resource: Set(target_resource),
         details: Set(details),
         client_ip: Set(client_ip.to_string()),
-        timestamp: Set(Utc::now()),
+        timestamp: Set(OffsetDateTime::now_utc()),
     };
     row.insert(db).await?;
     Ok(())
@@ -85,7 +87,8 @@ pub struct AuditLogResponse {
     /// Resolved client IP address.
     pub client_ip: String,
     /// UTC timestamp when the action was logged.
-    pub timestamp: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub timestamp: OffsetDateTime,
 }
 
 /// `GET /api/audit` — List audit logs with standardized filtering.
@@ -135,16 +138,25 @@ pub async fn list_audit_logs(
         }
         select = select.filter(cond);
     }
+    let backend = state.db.get_database_backend();
+    let timestamp = utc_sort_key(backend, Expr::col(audit_log::Column::Timestamp));
     if let Some(since_raw) = query
         .since
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        let since = DateTime::parse_from_rfc3339(since_raw)
-            .map_err(|_| AppError::InvalidInput("Malformed 'since' RFC 3339 timestamp".to_owned()))?
-            .with_timezone(&Utc);
-        select = select.filter(audit_log::Column::Timestamp.gte(since));
+        let since =
+            OffsetDateTime::parse(since_raw, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| {
+                    AppError::InvalidInput("Malformed 'since' RFC 3339 timestamp".to_owned())
+                })?
+                .to_offset(time::UtcOffset::UTC);
+        select = select.filter(
+            timestamp
+                .clone()
+                .gte(utc_sort_key(backend, Expr::val(since))),
+        );
     }
     if let Some(until_raw) = query
         .until
@@ -152,17 +164,24 @@ pub async fn list_audit_logs(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        let until = DateTime::parse_from_rfc3339(until_raw)
-            .map_err(|_| AppError::InvalidInput("Malformed 'until' RFC 3339 timestamp".to_owned()))?
-            .with_timezone(&Utc);
-        select = select.filter(audit_log::Column::Timestamp.lte(until));
+        let until =
+            OffsetDateTime::parse(until_raw, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| {
+                    AppError::InvalidInput("Malformed 'until' RFC 3339 timestamp".to_owned())
+                })?
+                .to_offset(time::UtcOffset::UTC);
+        select = select.filter(
+            timestamp
+                .clone()
+                .lte(utc_sort_key(backend, Expr::val(until))),
+        );
     }
 
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
     let offset = query.offset.unwrap_or(0);
 
     let rows = select
-        .order_by_desc(audit_log::Column::Timestamp)
+        .order_by_desc(timestamp)
         .limit(limit)
         .offset(offset)
         .all(&state.db)

@@ -2,7 +2,6 @@
 //! and verifies via EXPLAIN QUERY PLAN that queries use index scans instead of sequential table scans.
 
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
-use sea_orm_migration::MigratorTrait;
 use simply_fw_rules_manager::db::{connect, has_index};
 use simply_fw_rules_manager::migration::Migrator;
 
@@ -184,5 +183,79 @@ async fn explain_query_plans_verify_index_scans_eliminate_seq_scans() {
             plan.contains(expected_index),
             "Query '{query}' did not use index '{expected_index}'. Plan: {plan}"
         );
+    }
+}
+
+#[tokio::test]
+async fn preserves_legacy_migration_history_and_records_only_pending_versions() {
+    use sea_orm::sea_query::{Alias, ColumnDef, Expr, Query, Table};
+
+    let db = connect("sqlite::memory:")
+        .await
+        .expect("in-memory database");
+    let ledger = Alias::new("seaql_migrations");
+    let version = Alias::new("version");
+    let applied_at = Alias::new("applied_at");
+    db.execute(
+        Table::create()
+            .table(ledger.clone())
+            .col(
+                ColumnDef::new(version.clone())
+                    .string()
+                    .not_null()
+                    .primary_key(),
+            )
+            .col(ColumnDef::new(applied_at.clone()).big_integer().not_null()),
+    )
+    .await
+    .expect("legacy ledger schema");
+
+    let versions = [
+        "m20260101_000001_create_tables",
+        "m20261109_000002_add_performance_indexes",
+        "m20261110_000003_add_query_optimization_indexes",
+        "m20261115_000004_master_marker",
+        "m20261119_000005_unify_text_columns",
+    ];
+    // Seed the first four ledger entries without their tables. Running any of the
+    // recorded index migrations again would fail because their tables are absent.
+    for name in &versions[..4] {
+        db.execute(
+            Query::insert()
+                .into_table(ledger.clone())
+                .columns([version.clone(), applied_at.clone()])
+                .values_panic([Expr::val(*name), Expr::val(42_i64)]),
+        )
+        .await
+        .expect("legacy ledger entry");
+    }
+
+    let before = time::OffsetDateTime::now_utc().unix_timestamp();
+    Migrator::up(&db, None)
+        .await
+        .expect("apply pending migration");
+    Migrator::up(&db, None)
+        .await
+        .expect("repeat migration startup");
+    let after = time::OffsetDateTime::now_utc().unix_timestamp();
+
+    let rows = db
+        .query_all(
+            Query::select()
+                .columns([version.clone(), applied_at])
+                .from(ledger)
+                .order_by(version, sea_orm::sea_query::Order::Asc),
+        )
+        .await
+        .expect("read ledger");
+    assert_eq!(rows.len(), versions.len());
+    for (i, (row, expected)) in rows.iter().zip(versions).enumerate() {
+        assert_eq!(row.try_get_by::<String, _>(0).expect("version"), expected);
+        let timestamp: i64 = row.try_get_by(1).expect("applied_at");
+        if i < 4 {
+            assert_eq!(timestamp, 42);
+        } else {
+            assert!((before..=after).contains(&timestamp));
+        }
     }
 }

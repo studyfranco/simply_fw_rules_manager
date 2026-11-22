@@ -6,17 +6,19 @@ use axum::Extension;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use chrono::{DateTime, Utc};
 use ipnet::IpNet;
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, Set,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::api::audit::record_audit;
 use crate::crypto::generate_signing_secret;
+use crate::db::utc_sort_key;
 use crate::entities::api_key::{self, ScopeAccess};
 use crate::entities::prelude::ApiKey;
 use crate::error::AppError;
@@ -50,9 +52,11 @@ pub struct ApiKeyResponse {
     /// Optional comma-separated allowed client IPs/CIDRs.
     pub bound_ips: Option<String>,
     /// UTC creation timestamp.
-    pub created_at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
     /// UTC modification timestamp.
-    pub updated_at: DateTime<Utc>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
 }
 
 impl From<api_key::Model> for ApiKeyResponse {
@@ -216,7 +220,10 @@ pub async fn list_api_keys(
     State(state): State<AppState>,
     Extension(caller): Extension<api_key::Model>,
 ) -> Result<Json<Vec<ApiKeyResponse>>, AppError> {
-    let mut select = ApiKey::find().order_by_asc(api_key::Column::CreatedAt);
+    let mut select = ApiKey::find().order_by_asc(utc_sort_key(
+        state.db.get_database_backend(),
+        Expr::col(api_key::Column::CreatedAt),
+    ));
     if !caller.is_master {
         if caller.can_manage_keys.is_granted() {
             select = select.filter(
@@ -274,7 +281,7 @@ pub async fn create_api_key(
     let sealed_secret = state.cipher.seal(&raw_secret)?;
 
     let id = Uuid::new_v4();
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let model = api_key::ActiveModel {
         id: Set(id),
         name: Set(name.clone()),
@@ -362,7 +369,7 @@ pub async fn update_api_key(
         let bound_ips = validate_bound_ips(payload.bound_ips.as_deref())?;
         let mut active: api_key::ActiveModel = target.into();
         active.bound_ips = Set(bound_ips.clone());
-        active.updated_at = Set(Utc::now());
+        active.updated_at = Set(OffsetDateTime::now_utc());
         let updated = active.update(&state.db).await?;
         record_audit(
             &state.db,
@@ -418,7 +425,7 @@ pub async fn update_api_key(
     if payload.bound_ips.is_some() {
         active.bound_ips = Set(validate_bound_ips(payload.bound_ips.as_deref())?);
     }
-    active.updated_at = Set(Utc::now());
+    active.updated_at = Set(OffsetDateTime::now_utc());
 
     let updated = active.update(&state.db).await?;
     record_audit(
@@ -519,7 +526,7 @@ pub async fn rotate_api_key(
     let mut active: api_key::ActiveModel = target.into();
     active.key_hash = Set(key_hash);
     active.prefix = Set(prefix.clone());
-    active.updated_at = Set(Utc::now());
+    active.updated_at = Set(OffsetDateTime::now_utc());
     let updated = active.update(&state.db).await?;
 
     record_audit(
@@ -578,7 +585,7 @@ pub async fn rotate_signing_secret(
 
     let mut active: api_key::ActiveModel = target.into();
     active.signing_secret = Set(Some(sealed_secret));
-    active.updated_at = Set(Utc::now());
+    active.updated_at = Set(OffsetDateTime::now_utc());
     let updated = active.update(&state.db).await?;
 
     record_audit(

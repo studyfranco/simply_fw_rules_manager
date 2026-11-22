@@ -1,6 +1,11 @@
 //! Adds advanced lookup, covering, and composite sort-filtering indexes across all tables.
 
-use sea_orm_migration::prelude::*;
+use sea_orm::{
+    DbErr, DeriveIden,
+    sea_query::{Index, IndexOrder, IntoIden},
+};
+
+use super::runner::SchemaManager;
 
 #[derive(DeriveIden)]
 enum ApiKeys {
@@ -45,12 +50,9 @@ enum FwBlocklists {
     SortOrder,
 }
 
-#[derive(DeriveMigrationName)]
-pub struct Migration;
-
 async fn create_api_key_indexes(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_api_keys_is_master")
                 .table(ApiKeys::Table)
@@ -59,7 +61,7 @@ async fn create_api_key_indexes(manager: &SchemaManager<'_>) -> Result<(), DbErr
         )
         .await?;
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_api_keys_name")
                 .table(ApiKeys::Table)
@@ -68,7 +70,7 @@ async fn create_api_key_indexes(manager: &SchemaManager<'_>) -> Result<(), DbErr
         )
         .await?;
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_api_keys_created_at")
                 .table(ApiKeys::Table)
@@ -77,7 +79,7 @@ async fn create_api_key_indexes(manager: &SchemaManager<'_>) -> Result<(), DbErr
         )
         .await?;
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_api_keys_parent_created")
                 .table(ApiKeys::Table)
@@ -90,7 +92,7 @@ async fn create_api_key_indexes(manager: &SchemaManager<'_>) -> Result<(), DbErr
 
 async fn create_audit_log_indexes(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_audit_logs_key_timestamp")
                 .table(AuditLogs::Table)
@@ -100,7 +102,7 @@ async fn create_audit_log_indexes(manager: &SchemaManager<'_>) -> Result<(), DbE
         )
         .await?;
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_audit_logs_client_ip_timestamp")
                 .table(AuditLogs::Table)
@@ -110,7 +112,7 @@ async fn create_audit_log_indexes(manager: &SchemaManager<'_>) -> Result<(), DbE
         )
         .await?;
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_audit_logs_key_name")
                 .table(AuditLogs::Table)
@@ -119,7 +121,7 @@ async fn create_audit_log_indexes(manager: &SchemaManager<'_>) -> Result<(), DbE
         )
         .await?;
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_audit_logs_key_prefix")
                 .table(AuditLogs::Table)
@@ -131,7 +133,7 @@ async fn create_audit_log_indexes(manager: &SchemaManager<'_>) -> Result<(), DbE
 
 async fn create_zone_rule_indexes(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_fw_zone_rules_enabled_sort")
                 .table(FwZoneRules::Table)
@@ -141,7 +143,7 @@ async fn create_zone_rule_indexes(manager: &SchemaManager<'_>) -> Result<(), DbE
         )
         .await?;
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_fw_zone_rules_sort_order")
                 .table(FwZoneRules::Table)
@@ -150,7 +152,7 @@ async fn create_zone_rule_indexes(manager: &SchemaManager<'_>) -> Result<(), DbE
         )
         .await?;
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_fw_zone_rules_zone_sort")
                 .table(FwZoneRules::Table)
@@ -160,7 +162,7 @@ async fn create_zone_rule_indexes(manager: &SchemaManager<'_>) -> Result<(), DbE
         )
         .await?;
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_fw_zone_rules_rule_kind")
                 .table(FwZoneRules::Table)
@@ -172,7 +174,7 @@ async fn create_zone_rule_indexes(manager: &SchemaManager<'_>) -> Result<(), DbE
 
 async fn create_docker_rule_indexes(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_fw_docker_inter_rules_enabled_sort")
                 .table(FwDockerInterRules::Table)
@@ -182,7 +184,7 @@ async fn create_docker_rule_indexes(manager: &SchemaManager<'_>) -> Result<(), D
         )
         .await?;
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_fw_docker_inter_rules_sort_order")
                 .table(FwDockerInterRules::Table)
@@ -191,7 +193,7 @@ async fn create_docker_rule_indexes(manager: &SchemaManager<'_>) -> Result<(), D
         )
         .await?;
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_fw_docker_inter_rules_network")
                 .table(FwDockerInterRules::Table)
@@ -203,7 +205,7 @@ async fn create_docker_rule_indexes(manager: &SchemaManager<'_>) -> Result<(), D
 
 async fn create_blocklist_indexes(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_fw_blocklists_enabled_sort")
                 .table(FwBlocklists::Table)
@@ -213,7 +215,7 @@ async fn create_blocklist_indexes(manager: &SchemaManager<'_>) -> Result<(), DbE
         )
         .await?;
     manager
-        .create_index(
+        .execute(
             Index::create()
                 .name("idx_fw_blocklists_sort_order")
                 .table(FwBlocklists::Table)
@@ -223,73 +225,70 @@ async fn create_blocklist_indexes(manager: &SchemaManager<'_>) -> Result<(), DbE
         .await
 }
 
-#[async_trait::async_trait]
-impl MigrationTrait for Migration {
-    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        create_api_key_indexes(manager).await?;
-        create_audit_log_indexes(manager).await?;
-        create_zone_rule_indexes(manager).await?;
-        create_docker_rule_indexes(manager).await?;
-        create_blocklist_indexes(manager).await
+pub(super) async fn up(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    create_api_key_indexes(manager).await?;
+    create_audit_log_indexes(manager).await?;
+    create_zone_rule_indexes(manager).await?;
+    create_docker_rule_indexes(manager).await?;
+    create_blocklist_indexes(manager).await
+}
+
+pub(super) async fn down(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
+    let indexes = [
+        ("idx_api_keys_is_master", ApiKeys::Table.into_iden()),
+        ("idx_api_keys_name", ApiKeys::Table.into_iden()),
+        ("idx_api_keys_created_at", ApiKeys::Table.into_iden()),
+        ("idx_api_keys_parent_created", ApiKeys::Table.into_iden()),
+        ("idx_audit_logs_key_timestamp", AuditLogs::Table.into_iden()),
+        (
+            "idx_audit_logs_client_ip_timestamp",
+            AuditLogs::Table.into_iden(),
+        ),
+        ("idx_audit_logs_key_name", AuditLogs::Table.into_iden()),
+        ("idx_audit_logs_key_prefix", AuditLogs::Table.into_iden()),
+        (
+            "idx_fw_zone_rules_enabled_sort",
+            FwZoneRules::Table.into_iden(),
+        ),
+        (
+            "idx_fw_zone_rules_sort_order",
+            FwZoneRules::Table.into_iden(),
+        ),
+        (
+            "idx_fw_zone_rules_zone_sort",
+            FwZoneRules::Table.into_iden(),
+        ),
+        (
+            "idx_fw_zone_rules_rule_kind",
+            FwZoneRules::Table.into_iden(),
+        ),
+        (
+            "idx_fw_docker_inter_rules_enabled_sort",
+            FwDockerInterRules::Table.into_iden(),
+        ),
+        (
+            "idx_fw_docker_inter_rules_sort_order",
+            FwDockerInterRules::Table.into_iden(),
+        ),
+        (
+            "idx_fw_docker_inter_rules_network",
+            FwDockerInterRules::Table.into_iden(),
+        ),
+        (
+            "idx_fw_blocklists_enabled_sort",
+            FwBlocklists::Table.into_iden(),
+        ),
+        (
+            "idx_fw_blocklists_sort_order",
+            FwBlocklists::Table.into_iden(),
+        ),
+    ];
+
+    for (name, table) in indexes {
+        manager
+            .execute(Index::drop().name(name).table(table).to_owned())
+            .await?;
     }
 
-    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        let indexes = [
-            ("idx_api_keys_is_master", ApiKeys::Table.into_iden()),
-            ("idx_api_keys_name", ApiKeys::Table.into_iden()),
-            ("idx_api_keys_created_at", ApiKeys::Table.into_iden()),
-            ("idx_api_keys_parent_created", ApiKeys::Table.into_iden()),
-            ("idx_audit_logs_key_timestamp", AuditLogs::Table.into_iden()),
-            (
-                "idx_audit_logs_client_ip_timestamp",
-                AuditLogs::Table.into_iden(),
-            ),
-            ("idx_audit_logs_key_name", AuditLogs::Table.into_iden()),
-            ("idx_audit_logs_key_prefix", AuditLogs::Table.into_iden()),
-            (
-                "idx_fw_zone_rules_enabled_sort",
-                FwZoneRules::Table.into_iden(),
-            ),
-            (
-                "idx_fw_zone_rules_sort_order",
-                FwZoneRules::Table.into_iden(),
-            ),
-            (
-                "idx_fw_zone_rules_zone_sort",
-                FwZoneRules::Table.into_iden(),
-            ),
-            (
-                "idx_fw_zone_rules_rule_kind",
-                FwZoneRules::Table.into_iden(),
-            ),
-            (
-                "idx_fw_docker_inter_rules_enabled_sort",
-                FwDockerInterRules::Table.into_iden(),
-            ),
-            (
-                "idx_fw_docker_inter_rules_sort_order",
-                FwDockerInterRules::Table.into_iden(),
-            ),
-            (
-                "idx_fw_docker_inter_rules_network",
-                FwDockerInterRules::Table.into_iden(),
-            ),
-            (
-                "idx_fw_blocklists_enabled_sort",
-                FwBlocklists::Table.into_iden(),
-            ),
-            (
-                "idx_fw_blocklists_sort_order",
-                FwBlocklists::Table.into_iden(),
-            ),
-        ];
-
-        for (name, table) in indexes {
-            manager
-                .drop_index(Index::drop().name(name).table(table).to_owned())
-                .await?;
-        }
-
-        Ok(())
-    }
+    Ok(())
 }
